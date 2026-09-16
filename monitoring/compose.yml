@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: router_monitor
+      POSTGRES_PASSWORD: ${ROUTER_MONITOR_POSTGRES_PASSWORD:?ROUTER_MONITOR_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: router_monitor
+    volumes:
+      - router_monitor_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U router_monitor -d router_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [monitoring]
+
+  router_monitor:
+    build: ./router-monitor
+    profiles: [monitoring]
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      ROUTER_MONITOR_DATABASE_URL: postgresql+psycopg://router_monitor:${ROUTER_MONITOR_POSTGRES_PASSWORD}@postgres:5432/router_monitor
+      ROUTER_MONITOR_INVENTORY: /etc/router-monitor/inventory.yml
+    volumes:
+      - ./router-monitor/config/inventory.example.yml:/etc/router-monitor/inventory.yml:ro
+    networks: [monitoring]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    networks: [monitoring]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [monitoring]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports: ["127.0.0.1:9093:9093"]
+    networks: [monitoring]
+
+volumes:
+  router_monitor_postgres:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+networks:
+  monitoring:
+    driver: bridge
+

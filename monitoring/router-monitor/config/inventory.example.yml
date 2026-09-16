@@ -1,0 +1,41 @@
+central:
+  name: aeza.balaganet.site
+
+gateways:
+  gateway-a:
+    host: gateway-a.example.invalid
+  irving:
+    host: irving.balaganet.site
+
+routers:
+  - id: gribanov-apartments163
+    display_name: gribanov-apartments163
+    gateway: aeza.balaganet.site
+    reverse_port: 2201
+    model: xiaomi-mi-router-ax3000t
+    egress_policy: foreign
+  - id: gribanov-apartments189
+    display_name: gribanov-apartments189
+    gateway: gateway-a
+    reverse_port: 2202
+    model: xiaomi-mi-router-ax3000t
+    egress_policy: foreign
+  - id: tatarskaya-1-7
+    display_name: Tatarskaya-1-7
+    gateway: irving
+    reverse_port: 2203
+    model: xiaomi-mi-router-ax3000t
+    egress_policy: foreign
+  - id: gribanov-telek
+    display_name: gribanov-telek
+    gateway: gateway-a
+    reverse_port: 2204
+    model: xiaomi-mi-router-3-pro
+    egress_policy: foreign
+  - id: gribanov-podval
+    display_name: gribanov-podval
+    gateway: gateway-a
+    reverse_port: 2205
+    model: xiaomi-mi-router-3-pro
+    egress_policy: foreign
+
