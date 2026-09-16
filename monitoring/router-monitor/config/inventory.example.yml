@@ -1,16 +1,16 @@
 central:
-  name: aeza.balaganet.site
+  host: central-monitor.example
 
 gateways:
   gateway-a:
     host: gateway-a.example.invalid
-  irving:
-    host: irving.balaganet.site
+  gateway-02:
+    host: gateway-02.example
 
 routers:
   - id: gribanov-apartments163
     display_name: gribanov-apartments163
-    gateway: aeza.balaganet.site
+    gateway: central
     reverse_port: 2201
     model: xiaomi-mi-router-ax3000t
     egress_policy: foreign
@@ -38,4 +38,3 @@ routers:
     reverse_port: 2205
     model: xiaomi-mi-router-3-pro
     egress_policy: foreign
-

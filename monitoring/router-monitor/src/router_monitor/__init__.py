@@ -1,2 +1,1 @@
-"""Central BALAGAN router monitor package."""
-
+"""Central router monitoring package."""

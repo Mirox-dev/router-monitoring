@@ -1,8 +1,8 @@
-# BALAGAN Router Monitoring
+# Router Monitoring
 
 ## Цель
 
-Центральный сервис на `aeza.balaganet.site` контролирует OpenWrt-роутеры,
+Центральный сервис контролирует OpenWrt-роутеры,
 которые выбирают gateway по retry-списку и публикуют SSH reverse tunnel на
 `127.0.0.1:220x`. На роутерах не хранятся история, база данных или постоянный
 мониторинговый агент.
@@ -11,7 +11,7 @@
 
 ```text
 Telegram Bot + Monitor + PostgreSQL + Prometheus/Grafana/Alertmanager
-                         (aeza.balaganet.site)
+                         (central-monitor.example)
                          /        |        \
              SSH gateway 1   SSH gateway 2   локальные сервисы
                    |               |
@@ -20,7 +20,7 @@ Telegram Bot + Monitor + PostgreSQL + Prometheus/Grafana/Alertmanager
                     OpenWrt routers
 ```
 
-`aeza` — единственная точка запуска Telegram-бота и источник истины для
+Центральный сервер — единственная точка запуска Telegram-бота и источник истины для
 состояния мониторинга. Gateway-серверы сохраняют только собственные systemd
 journal и обслуживают reverse SSH.
 
@@ -72,8 +72,8 @@ Inventory будет содержать router id/name, модель, gateway ho
 
 | Router | Port | Gateway |
 |---|---:|---|
-| gribanov-apartments163 | 2201 | aeza.balaganet.site |
+| router-01 | 2201 | central-monitor.example |
 | gribanov-apartments189 | 2202 | gateway-a |
-| Tatarskaya-1-7 | 2203 | irving.balaganet.site |
+| router-03 | 2203 | gateway-02.example |
 | gribanov-telek | 2204 | gateway-a |
 | gribanov-podval | 2205 | gateway-a |

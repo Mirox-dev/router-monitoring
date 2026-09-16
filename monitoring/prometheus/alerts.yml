@@ -1,0 +1,22 @@
+groups:
+  - name: router-health
+    interval: 30s
+    rules:
+      - alert: RouterTransportDown
+        expr: router_transport_ok == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Reverse SSH transport is down"
+      - alert: RouterForeignEgressDown
+        expr: router_vpn_ok == 0
+        for: 3m
+        labels: {severity: critical}
+        annotations:
+          summary: "Router has no foreign egress IP"
+      - alert: RouterLoadHigh
+        expr: router_load1 > 4
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Router load average is high"

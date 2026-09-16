@@ -7,6 +7,9 @@ scrape_configs:
     static_configs:
       - targets: [prometheus:9090]
 
-  # The router-monitor exporter will be added when collector contracts land.
-  # It remains intentionally absent from the initial scaffold.
+  - job_name: router-monitor
+    static_configs:
+      - targets: [router_monitor:9108]
 
+rule_files:
+  - /etc/prometheus/alerts.yml

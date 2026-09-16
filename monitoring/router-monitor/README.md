@@ -1,18 +1,18 @@
 # Router Monitor
 
-Первый архитектурный каркас центрального monitor-сервиса BALAGAN.
+Центральный monitor-сервис для OpenWrt-роутеров.
 
-На текущем этапе зафиксированы контракты и topology; production-доступ к
-роутерам и gateway не включается автоматически.
+Сервис выполняет короткие allowlisted-проверки через reverse SSH; production-доступ
+к роутерам и gateway не включается автоматически.
 
 Планируемые компоненты:
 
-- `collector` — allowlisted SSH health checks;
-- `scheduler` — transport/runtime/functional/resource intervals;
+- `collector` — единый пакет allowlisted SSH health checks;
+- `scheduler` — цикл с настраиваемым интервалом и временным окном проверки;
 - `baseline` — adaptive per-router profiles;
 - `bot` — Telegram UI and confirmation flow;
 - `repository` — PostgreSQL state/events/audit;
-- Prometheus exporter — metrics only.
+- Prometheus exporter — load, RAM, VSZ/RSS, VPN и transport metrics.
 
 Локальный foundation запускается из `monitoring/compose.yml`. Реальные SSH
 ключи, Telegram token и production inventory туда не монтируются; для deployment

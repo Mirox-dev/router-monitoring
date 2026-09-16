@@ -12,7 +12,7 @@ reverse SSH. На каждом gateway исторически работала �
 
 ## Решение
 
-Оставить один Telegram Bot и один Monitor на `aeza.balaganet.site`. Monitor
+Оставить один Telegram Bot и один Monitor на центральном сервере. Monitor
 подключается к gateway по SSH, затем к `127.0.0.1:220x` роутера. Все события,
 временные ряды и команды хранятся централизованно.
 
@@ -36,4 +36,3 @@ endpoint'ами. Process/procd/`tun0` остаются диагностичес�
 недоступности data plane роутеров не меняется, но новые проверки и команды
 временно недоступны. Мониторинг должен иметь bounded retries, cooldown и
 backup PostgreSQL.
-
