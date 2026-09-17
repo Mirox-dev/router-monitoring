@@ -36,7 +36,7 @@ async def status(pool: asyncpg.Pool) -> str:
         return "Роутеры ещё не зарегистрированы."
     lines = ["СОСТОЯНИЕ РОУТЕРОВ", ""]
     for row in rows:
-        state = "✅" if row["transport_ok"] and row["foreign_ip_ok"] else "🔴"
+        state = "🔴" if not row["transport_ok"] else ("✅" if row["foreign_ip_ok"] else "⚠️")
         collected = row["collected_at"].strftime("%H:%M:%S") if row["collected_at"] else "нет данных"
         lines.extend([
             f"{state} {row['display_name']}",
