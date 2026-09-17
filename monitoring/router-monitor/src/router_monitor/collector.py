@@ -50,7 +50,7 @@ def _foreign(value: str) -> bool:
         return False
 
 
-def parse_output(output: str) -> Collected:
+def parse_output(output: str, allowed_ips: set[str] | None = None) -> Collected:
     fields: dict[str, str] = {}
     current: str | None = None
     keys = {"PROCESS", "SERVICE", "TUN", "LOAD", "MEM", "DISK", "PS", "PROCD", "IP1", "IP2"}
@@ -70,7 +70,7 @@ def parse_output(output: str) -> Collected:
         process_ok=bool(fields.get("PROCESS", "").strip()),
         service_ok=any(word in fields.get("SERVICE", "").lower() for word in ("running", "started")),
         tun_ok="tun0" in fields.get("TUN", "") and "UP" in fields.get("TUN", ""),
-        foreign_ip_ok=len(set(ips)) == 2 and all(_foreign(ip) for ip in ips),
+        foreign_ip_ok=len(ips) == 2 and all(ip in (allowed_ips or set()) for ip in ips),
         load1=_number(fields.get("LOAD", "")),
         cpu_percent=_number(ps[0]) if ps else None,
         vsz_kb=int(float(ps[1])) if len(ps) > 1 and ps[1].replace('.', '', 1).isdigit() else None,
@@ -86,7 +86,7 @@ class SSHCollector:
     def __init__(self, user: str, keys: list[str] | None, timeout: int = 10, known_hosts: str | None = None) -> None:
         self.user, self.keys, self.timeout, self.known_hosts = user, keys, timeout, known_hosts
 
-    async def collect(self, router: Router, gateway: Gateway) -> Collected:
+    async def collect(self, router: Router, gateway: Gateway, allowed_ips: set[str] | None = None) -> Collected:
         import asyncssh
 
         gateway_conn = await asyncio.wait_for(
@@ -102,7 +102,7 @@ class SSHCollector:
             result = await router_conn.run(_COMMAND, check=False)
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"remote command exited {result.exit_status}")
-            return parse_output(result.stdout)
+            return parse_output(result.stdout, allowed_ips)
         finally:
             if router_conn:
                 router_conn.close()

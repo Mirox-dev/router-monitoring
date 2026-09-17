@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS routers (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS external_ips (
+  value varchar(64) PRIMARY KEY,
+  added_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS health_samples (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   router_id varchar(64) NOT NULL REFERENCES routers(id) ON DELETE CASCADE,

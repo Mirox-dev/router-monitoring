@@ -23,6 +23,13 @@ class RouterRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class ExternalIP(Base):
+    __tablename__ = "external_ips"
+
+    value: Mapped[str] = mapped_column(String(64), primary_key=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class HealthSample(Base):
     __tablename__ = "health_samples"
 

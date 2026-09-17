@@ -10,7 +10,7 @@ from sqlalchemy import select
 from .collector import SSHCollector
 from .config import load_inventory
 from .db import create_schema, make_engine, make_session_factory
-from .models import HealthSample, MonitorCommand, RouterRecord
+from .models import ExternalIP, HealthSample, MonitorCommand, RouterRecord
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -23,9 +23,11 @@ vsz = Gauge("router_sing_box_vsz_kb", "sing-box virtual size in KiB", ["router"]
 
 async def poll_once(settings: Settings, inventory, sessions, collector: SSHCollector) -> None:
     started = datetime.now(timezone.utc)
+    async with sessions() as config_session:
+        allowed_ips = {row[0] for row in (await config_session.execute(select(ExternalIP.value))).all()}
     async def poll(router):
         try:
-            result = await collector.collect(router, inventory.gateway_for(router))
+            result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
             return router, result, None
         except Exception as exc:  # one unavailable router must not stop the cycle
             return router, None, str(exc)
@@ -77,7 +79,9 @@ async def process_commands(inventory, sessions, collector: SSHCollector) -> None
             if router is None:
                 raise ValueError("router is not present in inventory")
             if command.action == "health_check":
-                collected = await collector.collect(router, inventory.gateway_for(router))
+                async with sessions() as config_session:
+                    allowed_ips = {row[0] for row in (await config_session.execute(select(ExternalIP.value))).all()}
+                collected = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
                 payload = {"process_ok": collected.process_ok, "tun_ok": collected.tun_ok, "foreign_ip_ok": collected.foreign_ip_ok}
             elif command.action == "restart_sing_box":
                 payload = {"message": await collector.restart_sing_box(router, inventory.gateway_for(router))}

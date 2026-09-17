@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 
 import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
+
+class AddExternalIP(StatesGroup):
+    waiting_for_ip = State()
 
 
 def menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Все роутеры", callback_data="routers")],
+        [InlineKeyboardButton(text="Внешние IP", callback_data="external_ips")],
         [InlineKeyboardButton(text="События", callback_data="events"), InlineKeyboardButton(text="Обновить", callback_data="routers")],
     ])
 
@@ -57,6 +65,20 @@ async def router_list_menu(pool: asyncpg.Pool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+async def external_ip_view(pool: asyncpg.Pool, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    rows = await pool.fetch("SELECT value FROM external_ips ORDER BY value")
+    lines = ["РАЗРЕШЁННЫЕ ВНЕШНИЕ IP", "", "Оба адреса от ifconfig.me и api.ipify.org должны входить в этот список.", ""]
+    lines.extend(f"• {row['value']}" for row in rows)
+    if not rows:
+        lines.append("Список пуст.")
+    buttons = []
+    if is_admin(user_id):
+        buttons.append([InlineKeyboardButton(text="Добавить IP", callback_data="external_ip_add")])
+        buttons.extend([[InlineKeyboardButton(text=f"Удалить {row['value']}", callback_data=f"external_ip_remove:{row['value']}")] for row in rows])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="menu")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 async def main() -> None:
     token = os.environ["ROUTER_MONITOR_BOT_TOKEN"]
     dsn = os.environ["ROUTER_MONITOR_DATABASE_URL"]
@@ -67,6 +89,58 @@ async def main() -> None:
     @dispatcher.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer("Центральный мониторинг роутеров", reply_markup=menu())
+
+    @dispatcher.callback_query(F.data == "menu")
+    async def main_menu(callback: CallbackQuery) -> None:
+        await callback.message.edit_text("Центральный мониторинг роутеров", reply_markup=menu())
+        await callback.answer()
+
+    @dispatcher.callback_query(F.data == "external_ips")
+    async def external_ips(callback: CallbackQuery) -> None:
+        text, markup = await external_ip_view(pool, callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=markup)
+        await callback.answer()
+
+    @dispatcher.callback_query(F.data == "external_ip_add")
+    async def external_ip_add(callback: CallbackQuery, state: FSMContext) -> None:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Нет доступа", show_alert=True)
+            return
+        await state.set_state(AddExternalIP.waiting_for_ip)
+        await callback.message.edit_text("Отправьте IP одним сообщением, например: 8.8.8.8\n\nДля отмены нажмите /cancel")
+        await callback.answer()
+
+    @dispatcher.message(AddExternalIP.waiting_for_ip)
+    async def external_ip_received(message: Message, state: FSMContext) -> None:
+        if not is_admin(message.from_user.id):
+            await state.clear()
+            return
+        value = (message.text or "").strip()
+        try:
+            parsed = ipaddress.ip_address(value)
+        except ValueError:
+            await message.answer("Это не корректный IP-адрес. Отправьте IPv4 или IPv6 ещё раз.")
+            return
+        await pool.execute("INSERT INTO external_ips(value) VALUES($1) ON CONFLICT (value) DO NOTHING", str(parsed))
+        await state.clear()
+        text, markup = await external_ip_view(pool, message.from_user.id)
+        await message.answer(f"IP {parsed} добавлен.\n\n{text}", reply_markup=markup)
+
+    @dispatcher.message(Command("cancel"))
+    async def cancel_ip(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Действие отменено.", reply_markup=menu())
+
+    @dispatcher.callback_query(F.data.startswith("external_ip_remove:"))
+    async def external_ip_remove(callback: CallbackQuery) -> None:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Нет доступа", show_alert=True)
+            return
+        value = callback.data.split(":", 1)[1]
+        await pool.execute("DELETE FROM external_ips WHERE value=$1", value)
+        text, markup = await external_ip_view(pool, callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=markup)
+        await callback.answer("IP удалён")
 
     async def alert_webhook(request: web.Request) -> web.Response:
         payload = await request.json()
