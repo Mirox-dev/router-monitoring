@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import os
 import re
 
@@ -211,7 +212,8 @@ async def main() -> None:
             await callback.answer("Роутер не найден", show_alert=True)
             return
         collected = row["collected_at"].strftime("%d.%m.%Y %H:%M:%S") if row["collected_at"] else "нет данных"
-        checks = row["checks"] or {}
+        checks_raw = row["checks"]
+        checks = json.loads(checks_raw) if isinstance(checks_raw, str) else (checks_raw or {})
         ip1 = checks.get("ip1") or "нет данных"
         ip2 = checks.get("ip2") or "нет данных"
         text = (
