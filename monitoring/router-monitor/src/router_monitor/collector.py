@@ -109,3 +109,21 @@ class SSHCollector:
                 await router_conn.wait_closed()
             gateway_conn.close()
             await gateway_conn.wait_closed()
+
+    async def restart_sing_box(self, router: Router, gateway: Gateway) -> str:
+        import asyncssh
+
+        gateway_conn = await asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys)
+        router_conn = None
+        try:
+            router_conn = await asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn)
+            result = await router_conn.run("/etc/init.d/sing-box restart", check=False)
+            if result.exit_status not in (0, None):
+                raise RuntimeError(result.stderr.strip() or f"restart exited {result.exit_status}")
+            return result.stdout.strip() or "restart requested"
+        finally:
+            if router_conn:
+                router_conn.close()
+                await router_conn.wait_closed()
+            gateway_conn.close()
+            await gateway_conn.wait_closed()

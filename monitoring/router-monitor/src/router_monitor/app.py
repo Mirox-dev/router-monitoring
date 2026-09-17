@@ -5,11 +5,12 @@ import logging
 from datetime import datetime, timezone
 
 from prometheus_client import Gauge, start_http_server
+from sqlalchemy import select
 
 from .collector import SSHCollector
 from .config import load_inventory
 from .db import create_schema, make_engine, make_session_factory
-from .models import HealthSample, RouterRecord
+from .models import HealthSample, MonitorCommand, RouterRecord
 from .settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,40 @@ async def poll_once(settings: Settings, inventory, sessions, collector: SSHColle
         await session.commit()
 
 
+async def process_commands(inventory, sessions, collector: SSHCollector) -> None:
+    router_map = {router.id: router for router in inventory.routers}
+    async with sessions() as session:
+        result = await session.execute(select(MonitorCommand).where(MonitorCommand.status == "pending").order_by(MonitorCommand.created_at).with_for_update(skip_locked=True).limit(5))
+        commands = list(result.scalars())
+        for command in commands:
+            command.status = "running"
+            command.started_at = datetime.now(timezone.utc)
+        await session.commit()
+    for command in commands:
+        router = router_map.get(command.router_id)
+        finished = datetime.now(timezone.utc)
+        payload: dict[str, object]
+        status = "failed"
+        try:
+            if router is None:
+                raise ValueError("router is not present in inventory")
+            if command.action == "health_check":
+                collected = await collector.collect(router, inventory.gateway_for(router))
+                payload = {"process_ok": collected.process_ok, "tun_ok": collected.tun_ok, "foreign_ip_ok": collected.foreign_ip_ok}
+            elif command.action == "restart_sing_box":
+                payload = {"message": await collector.restart_sing_box(router, inventory.gateway_for(router))}
+            else:
+                raise ValueError("action is not allowlisted")
+            status = "completed"
+        except Exception as exc:
+            payload = {"error": str(exc)}
+        async with sessions() as session:
+            current = await session.get(MonitorCommand, command.id)
+            if current:
+                current.status, current.result, current.finished_at = status, payload, finished
+                await session.commit()
+
+
 async def run(settings: Settings) -> None:
     inventory = load_inventory(settings.inventory)
     engine = make_engine(settings.database_url)
@@ -59,6 +94,7 @@ async def run(settings: Settings) -> None:
     collector = SSHCollector(settings.ssh_user, settings.client_keys, settings.ssh_connect_timeout_seconds)
     while True:
         await poll_once(settings, inventory, sessions, collector)
+        await process_commands(inventory, sessions, collector)
         await asyncio.sleep(settings.poll_interval_seconds)
 
 

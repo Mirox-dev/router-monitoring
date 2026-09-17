@@ -56,3 +56,15 @@ CREATE TABLE IF NOT EXISTS baseline_profiles (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(router_id, metric, window)
 );
+
+CREATE TABLE IF NOT EXISTS monitor_commands (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  router_id varchar(64) NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+  action varchar(32) NOT NULL CHECK (action IN ('health_check', 'restart_sing_box')),
+  requested_by varchar(128) NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'pending',
+  result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
