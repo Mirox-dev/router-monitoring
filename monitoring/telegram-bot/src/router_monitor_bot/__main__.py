@@ -22,6 +22,25 @@ class AddExternalIP(StatesGroup):
     waiting_for_ip = State()
 
 
+last_screen_by_chat: dict[int, int] = {}
+
+
+async def send_screen(bot: Bot, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, *, old_message_id: int | None = None, user_message: Message | None = None) -> None:
+    old_id = old_message_id or last_screen_by_chat.get(chat_id)
+    if old_id and old_id != (user_message.message_id if user_message else None):
+        try:
+            await bot.delete_message(chat_id, old_id)
+        except TelegramBadRequest:
+            pass
+    if user_message:
+        try:
+            await user_message.delete()
+        except TelegramBadRequest:
+            pass
+    sent = await bot.send_message(chat_id, text, reply_markup=markup)
+    last_screen_by_chat[chat_id] = sent.message_id
+
+
 def menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Все роутеры", callback_data="routers")],
@@ -52,12 +71,8 @@ def router_menu(router_id: str, previous_id: str | None = None, next_id: str | N
 
 
 async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
-    """Replace the current bot screen so navigation does not grow the chat."""
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass
-    await callback.message.answer(text, reply_markup=markup)
+    """Delete the old screen and send the next one."""
+    await send_screen(callback.bot, callback.message.chat.id, text, markup, old_message_id=callback.message.message_id)
 
 
 async def status(pool: asyncpg.Pool) -> str:
@@ -119,22 +134,22 @@ async def main() -> None:
 
     @dispatcher.message(CommandStart())
     async def start(message: Message) -> None:
-        await message.answer("Центральный мониторинг роутеров", reply_markup=menu())
+        await send_screen(bot, message.chat.id, "Центральный мониторинг роутеров", menu(), user_message=message)
 
     @dispatcher.message(Command("routers"))
     async def routers_command(message: Message) -> None:
-        await message.answer(await status(pool), reply_markup=await router_list_menu(pool))
+        await send_screen(bot, message.chat.id, await status(pool), await router_list_menu(pool), user_message=message)
 
     @dispatcher.message(Command("external_ips"))
     async def external_ips_command(message: Message) -> None:
         text, markup = await external_ip_view(pool, message.from_user.id)
-        await message.answer(text, reply_markup=markup)
+        await send_screen(bot, message.chat.id, text, markup, user_message=message)
 
     @dispatcher.message(Command("events"))
     async def events_command(message: Message) -> None:
         rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
         text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
-        await message.answer(text, reply_markup=menu())
+        await send_screen(bot, message.chat.id, text, menu(), user_message=message)
 
     @dispatcher.callback_query(F.data == "menu")
     async def main_menu(callback: CallbackQuery) -> None:
@@ -164,22 +179,22 @@ async def main() -> None:
         value = (message.text or "").strip()
         if value.lower() == "/cancel":
             await state.clear()
-            await message.answer("Действие отменено.", reply_markup=menu())
+            await send_screen(bot, message.chat.id, "Действие отменено.", menu(), user_message=message)
             return
         try:
             parsed = ipaddress.ip_address(value)
         except ValueError:
-            await message.answer("Это не корректный IP-адрес. Отправьте IPv4 или IPv6 ещё раз.")
+            await send_screen(bot, message.chat.id, "Это не корректный IP-адрес. Отправьте IPv4 или IPv6 ещё раз.", user_message=message)
             return
         await pool.execute("INSERT INTO external_ips(value) VALUES($1) ON CONFLICT (value) DO NOTHING", str(parsed))
         await state.clear()
         text, markup = await external_ip_view(pool, message.from_user.id)
-        await message.answer(f"IP {parsed} добавлен.\n\n{text}", reply_markup=markup)
+        await send_screen(bot, message.chat.id, f"IP {parsed} добавлен.\n\n{text}", markup, user_message=message)
 
     @dispatcher.message(Command("cancel"))
     async def cancel_ip(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=menu())
+        await send_screen(bot, message.chat.id, "Действие отменено.", menu(), user_message=message)
 
     @dispatcher.callback_query(F.data.startswith("external_ip_remove:"))
     async def external_ip_remove(callback: CallbackQuery) -> None:
