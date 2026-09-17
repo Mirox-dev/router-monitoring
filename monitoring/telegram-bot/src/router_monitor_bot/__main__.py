@@ -8,7 +8,7 @@ import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -30,12 +30,20 @@ def is_admin(user_id: int) -> bool:
     return str(user_id) in allowed
 
 
-def router_menu(router_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def router_menu(router_id: str, previous_id: str | None = None, next_id: str | None = None) -> InlineKeyboardMarkup:
+    navigation = []
+    if previous_id:
+        navigation.append(InlineKeyboardButton(text="◀️ Предыдущий", callback_data=f"router:{previous_id}"))
+    if next_id:
+        navigation.append(InlineKeyboardButton(text="Следующий ▶️", callback_data=f"router:{next_id}"))
+    rows = [
         [InlineKeyboardButton(text="Проверить сейчас", callback_data=f"check:{router_id}")],
         [InlineKeyboardButton(text="Перезапустить sing-box", callback_data=f"restart:{router_id}")],
-        [InlineKeyboardButton(text="Назад", callback_data="routers")],
-    ])
+    ]
+    if navigation:
+        rows.append(navigation)
+    rows.append([InlineKeyboardButton(text="◀️ Назад к роутерам", callback_data="routers")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def status(pool: asyncpg.Pool) -> str:
@@ -61,7 +69,8 @@ async def status(pool: asyncpg.Pool) -> str:
 async def router_list_menu(pool: asyncpg.Pool) -> InlineKeyboardMarkup:
     rows = await pool.fetch("SELECT id, display_name FROM routers ORDER BY id")
     buttons = [[InlineKeyboardButton(text=row["display_name"], callback_data=f"router:{row['id']}")] for row in rows]
-    buttons.append([InlineKeyboardButton(text="Обновить", callback_data="routers")])
+    buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="routers")])
+    buttons.append([InlineKeyboardButton(text="◀️ В главное меню", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -75,7 +84,7 @@ async def external_ip_view(pool: asyncpg.Pool, user_id: int) -> tuple[str, Inlin
     if is_admin(user_id):
         buttons.append([InlineKeyboardButton(text="Добавить IP", callback_data="external_ip_add")])
         buttons.extend([[InlineKeyboardButton(text=f"Удалить {row['value']}", callback_data=f"external_ip_remove:{row['value']}")] for row in rows])
-    buttons.append([InlineKeyboardButton(text="Назад", callback_data="menu")])
+    buttons.append([InlineKeyboardButton(text="◀️ В главное меню", callback_data="menu")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -85,10 +94,32 @@ async def main() -> None:
     alert_chat_id = os.environ["ROUTER_MONITOR_ALERT_CHAT_ID"]
     pool = await asyncpg.create_pool(dsn)
     bot, dispatcher = Bot(token), Dispatcher()
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Открыть главное меню"),
+        BotCommand(command="routers", description="Показать роутеры"),
+        BotCommand(command="external_ips", description="Разрешённые внешние IP"),
+        BotCommand(command="events", description="Последние события"),
+        BotCommand(command="cancel", description="Отменить ввод IP"),
+    ])
 
     @dispatcher.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer("Центральный мониторинг роутеров", reply_markup=menu())
+
+    @dispatcher.message(Command("routers"))
+    async def routers_command(message: Message) -> None:
+        await message.answer(await status(pool), reply_markup=await router_list_menu(pool))
+
+    @dispatcher.message(Command("external_ips"))
+    async def external_ips_command(message: Message) -> None:
+        text, markup = await external_ip_view(pool, message.from_user.id)
+        await message.answer(text, reply_markup=markup)
+
+    @dispatcher.message(Command("events"))
+    async def events_command(message: Message) -> None:
+        rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
+        text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
+        await message.answer(text, reply_markup=menu())
 
     @dispatcher.callback_query(F.data == "menu")
     async def main_menu(callback: CallbackQuery) -> None:
@@ -193,7 +224,11 @@ async def main() -> None:
             f"  VSZ / RSS: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} / {row['rss_kb'] if row['rss_kb'] is not None else '—'} KiB\n\n"
             f"Последняя проверка: {collected}"
         )
-        await callback.message.edit_text(text, reply_markup=router_menu(router_id))
+        router_ids = [row["id"] for row in await pool.fetch("SELECT id FROM routers ORDER BY id")]
+        position = router_ids.index(router_id)
+        previous_id = router_ids[position - 1] if position > 0 else None
+        next_id = router_ids[position + 1] if position + 1 < len(router_ids) else None
+        await callback.message.edit_text(text, reply_markup=router_menu(router_id, previous_id, next_id))
         await callback.answer()
 
     @dispatcher.callback_query(F.data.startswith("check:"))
@@ -228,7 +263,7 @@ async def main() -> None:
     @dispatcher.callback_query(F.data == "events")
     async def events(callback: CallbackQuery) -> None:
         rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
-        text = "\n".join(f"{row['created_at']:%H:%M} {row['severity']} {row['router_id']}: {row['kind']}" for row in rows) or "Событий нет."
+        text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
         await callback.message.edit_text(text, reply_markup=menu())
         await callback.answer()
 
