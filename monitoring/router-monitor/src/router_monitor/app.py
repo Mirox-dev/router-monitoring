@@ -33,10 +33,13 @@ async def poll_once(settings: Settings, inventory, sessions, collector: SSHColle
     results = await asyncio.gather(*(poll(router) for router in inventory.routers))
     finished = datetime.now(timezone.utc)
     async with sessions() as session:
-        records = []
+        existing = {row.id: row for row in (await session.execute(select(RouterRecord).where(RouterRecord.id.in_([router.id for router in inventory.routers])))).scalars()}
         for router, result, error in results:
-            records.append(RouterRecord(id=router.id, display_name=router.display_name, model=router.model, gateway=router.gateway, reverse_port=router.reverse_port, egress_policy=router.egress_policy))
-        session.add_all(records)
+            record = existing.get(router.id)
+            if record is None:
+                record = RouterRecord(id=router.id)
+                session.add(record)
+            record.display_name, record.model, record.gateway, record.reverse_port, record.egress_policy = router.display_name, router.model, router.gateway, router.reverse_port, router.egress_policy
         await session.flush()
         for router, result, error in results:
             if result:
