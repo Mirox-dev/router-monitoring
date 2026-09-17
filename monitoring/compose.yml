@@ -27,6 +27,17 @@ services:
       - ./router-monitor/config/inventory.example.yml:/etc/router-monitor/inventory.yml:ro
     networks: [monitoring]
 
+  telegram_bot:
+    build: ./telegram-bot
+    profiles: [monitoring]
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      ROUTER_MONITOR_BOT_TOKEN: ${ROUTER_MONITOR_BOT_TOKEN:?ROUTER_MONITOR_BOT_TOKEN is required}
+      ROUTER_MONITOR_DATABASE_URL: postgresql://router_monitor:${ROUTER_MONITOR_POSTGRES_PASSWORD}@postgres:5432/router_monitor
+    networks: [monitoring]
+
   prometheus:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped

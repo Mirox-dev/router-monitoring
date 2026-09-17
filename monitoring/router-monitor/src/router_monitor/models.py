@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -56,3 +56,19 @@ class Event(Base):
     severity: Mapped[str] = mapped_column(String(16), default="info")
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class BaselineProfile(Base):
+    __tablename__ = "baseline_profiles"
+    __table_args__ = (UniqueConstraint("router_id", "metric", "window"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid())
+    router_id: Mapped[str] = mapped_column(ForeignKey("routers.id", ondelete="CASCADE"), index=True)
+    metric: Mapped[str] = mapped_column(String(64))
+    window: Mapped[str] = mapped_column(String(32))
+    median_value: Mapped[float] = mapped_column(Float)
+    p95_value: Mapped[float] = mapped_column(Float)
+    mad_value: Mapped[float] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    learning: Mapped[bool] = mapped_column(default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -42,3 +42,17 @@ CREATE TABLE IF NOT EXISTS monitor_events (
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS baseline_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  router_id varchar(64) NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+  metric varchar(64) NOT NULL,
+  window varchar(32) NOT NULL,
+  median_value double precision NOT NULL,
+  p95_value double precision NOT NULL,
+  mad_value double precision NOT NULL,
+  sample_count integer NOT NULL DEFAULT 0,
+  learning boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE(router_id, metric, window)
+);
