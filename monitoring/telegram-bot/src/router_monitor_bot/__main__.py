@@ -116,6 +116,10 @@ async def main() -> None:
             await state.clear()
             return
         value = (message.text or "").strip()
+        if value.lower() == "/cancel":
+            await state.clear()
+            await message.answer("Действие отменено.", reply_markup=menu())
+            return
         try:
             parsed = ipaddress.ip_address(value)
         except ValueError:
