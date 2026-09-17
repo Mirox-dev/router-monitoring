@@ -11,6 +11,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.fsm.context import FSMContext
@@ -48,6 +49,15 @@ def router_menu(router_id: str, previous_id: str | None = None, next_id: str | N
         rows.append(navigation)
     rows.append([InlineKeyboardButton(text="◀️ Назад к роутерам", callback_data="routers")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    """Replace the current bot screen so navigation does not grow the chat."""
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await callback.message.answer(text, reply_markup=markup)
 
 
 async def status(pool: asyncpg.Pool) -> str:
@@ -128,13 +138,13 @@ async def main() -> None:
 
     @dispatcher.callback_query(F.data == "menu")
     async def main_menu(callback: CallbackQuery) -> None:
-        await callback.message.edit_text("Центральный мониторинг роутеров", reply_markup=menu())
+        await replace_menu(callback, "Центральный мониторинг роутеров", menu())
         await callback.answer()
 
     @dispatcher.callback_query(F.data == "external_ips")
     async def external_ips(callback: CallbackQuery) -> None:
         text, markup = await external_ip_view(pool, callback.from_user.id)
-        await callback.message.edit_text(text, reply_markup=markup)
+        await replace_menu(callback, text, markup)
         await callback.answer()
 
     @dispatcher.callback_query(F.data == "external_ip_add")
@@ -143,7 +153,7 @@ async def main() -> None:
             await callback.answer("Нет доступа", show_alert=True)
             return
         await state.set_state(AddExternalIP.waiting_for_ip)
-        await callback.message.edit_text("Отправьте IP одним сообщением, например: 8.8.8.8\n\nДля отмены нажмите /cancel")
+        await replace_menu(callback, "Отправьте IP одним сообщением, например: 8.8.8.8\n\nДля отмены нажмите /cancel")
         await callback.answer()
 
     @dispatcher.message(AddExternalIP.waiting_for_ip)
@@ -179,7 +189,7 @@ async def main() -> None:
         value = callback.data.split(":", 1)[1]
         await pool.execute("DELETE FROM external_ips WHERE value=$1", value)
         text, markup = await external_ip_view(pool, callback.from_user.id)
-        await callback.message.edit_text(text, reply_markup=markup)
+        await replace_menu(callback, text, markup)
         await callback.answer("IP удалён")
 
     async def alert_webhook(request: web.Request) -> web.Response:
@@ -201,7 +211,7 @@ async def main() -> None:
 
     @dispatcher.callback_query(F.data == "routers")
     async def routers(callback: CallbackQuery) -> None:
-        await callback.message.edit_text(await status(pool), reply_markup=await router_list_menu(pool))
+        await replace_menu(callback, await status(pool), await router_list_menu(pool))
         await callback.answer()
 
     @dispatcher.callback_query(F.data.startswith("router:"))
@@ -245,7 +255,7 @@ async def main() -> None:
         position = router_ids.index(router_id)
         previous_id = router_ids[position - 1] if position > 0 else None
         next_id = router_ids[position + 1] if position + 1 < len(router_ids) else None
-        await callback.message.edit_text(text, reply_markup=router_menu(router_id, previous_id, next_id))
+        await replace_menu(callback, text, router_menu(router_id, previous_id, next_id))
         await callback.answer()
 
     @dispatcher.callback_query(F.data.startswith("check:"))
@@ -264,7 +274,7 @@ async def main() -> None:
             return
         router_id = callback.data.split(":", 1)[1]
         confirm = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Подтвердить restart", callback_data=f"restart-confirm:{router_id}")], [InlineKeyboardButton(text="Отмена", callback_data="routers")]])
-        await callback.message.edit_text("Команда перезапустит sing-box на роутере. Подтвердить?", reply_markup=confirm)
+        await replace_menu(callback, "Команда перезапустит sing-box на роутере. Подтвердить?", confirm)
         await callback.answer()
 
     @dispatcher.callback_query(F.data.startswith("restart-confirm:"))
@@ -274,14 +284,14 @@ async def main() -> None:
             return
         router_id = callback.data.split(":", 1)[1]
         await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by) VALUES ($1, 'restart_sing_box', $2)", router_id, str(callback.from_user.id))
-        await callback.message.edit_text("Перезапуск поставлен в очередь.", reply_markup=menu())
+        await replace_menu(callback, "Перезапуск поставлен в очередь.", menu())
         await callback.answer()
 
     @dispatcher.callback_query(F.data == "events")
     async def events(callback: CallbackQuery) -> None:
         rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
         text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
-        await callback.message.edit_text(text, reply_markup=menu())
+        await replace_menu(callback, text, menu())
         await callback.answer()
 
     try:
