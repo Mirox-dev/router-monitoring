@@ -63,8 +63,8 @@ async def status(pool: asyncpg.Pool) -> str:
         lines.extend([
             f"{state} {row['display_name']}",
             f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'}",
-            f"   ```ssh\n   ssh -J root@{gateway_host} -p {row['reverse_port']} root@127.0.0.1\n   ```",
             f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}",
+            f"   ```ssh\n   ssh -J root@{gateway_host} -p {row['reverse_port']} root@127.0.0.1\n   ```",
             "",
         ])
     return "\n".join(lines)
