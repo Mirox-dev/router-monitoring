@@ -206,13 +206,18 @@ async def main() -> None:
     @dispatcher.callback_query(F.data.startswith("router:"))
     async def router_detail(callback: CallbackQuery) -> None:
         router_id = callback.data.split(":", 1)[1]
-        row = await pool.fetchrow("""SELECT r.display_name, r.gateway, r.reverse_port, h.* FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true WHERE r.id=$1""", router_id)
+        row = await pool.fetchrow("""SELECT r.display_name, r.model, r.gateway, r.reverse_port, h.* FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true WHERE r.id=$1""", router_id)
         if not row:
             await callback.answer("Роутер не найден", show_alert=True)
             return
         collected = row["collected_at"].strftime("%d.%m.%Y %H:%M:%S") if row["collected_at"] else "нет данных"
+        checks = row["checks"] or {}
+        ip1 = checks.get("ip1") or "нет данных"
+        ip2 = checks.get("ip2") or "нет данных"
         text = (
             f"{row['display_name']}\n\n"
+            f"МОДЕЛЬ\n"
+            f"  {row['model']}\n\n"
             f"SSH-СОЕДИНЕНИЕ\n"
             f"  Сервер: {row['gateway']}\n"
             f"  Reverse SSH порт: {row['reverse_port']}\n"
@@ -220,12 +225,18 @@ async def main() -> None:
             f"SING-BOX\n"
             f"  Процесс: {'работает' if row['process_ok'] else 'не работает'}\n"
             f"  Сервис init.d: {'активен' if row['service_ok'] else 'неактивен'}\n"
-            f"  tun0: {'есть' if row['tun_ok'] else 'нет'}\n"
-            f"  Внешний IP: {'иностранный' if row['foreign_ip_ok'] else 'не иностранный'}\n\n"
+            f"  tun0: {'есть и поднят' if row['tun_ok'] else 'отсутствует или выключен'}\n"
+            f"  IP через ifconfig.me: {ip1}\n"
+            f"  IP через api.ipify.org: {ip2}\n"
+            f"  Проверка allowlist: {'пройдена' if row['foreign_ip_ok'] else 'не пройдена'}\n\n"
             f"НАГРУЗКА\n"
             f"  Load average: {row['load1'] if row['load1'] is not None else '—'}\n"
+            f"  CPU процесса: {row['cpu_percent'] if row['cpu_percent'] is not None else '—'} %\n"
             f"  RAM свободно: {row['mem_available_kb'] if row['mem_available_kb'] is not None else '—'} KiB\n"
-            f"  VSZ / RSS: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} / {row['rss_kb'] if row['rss_kb'] is not None else '—'} KiB\n\n"
+            f"  Диск занят: {row['disk_used_percent'] if row['disk_used_percent'] is not None else '—'} %\n"
+            f"  VSZ: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} KiB\n"
+            f"  RSS: {row['rss_kb'] if row['rss_kb'] is not None else '—'} KiB\n"
+            f"  Рестарты sing-box: {row['restart_count'] if row['restart_count'] is not None else '—'}\n\n"
             f"Последняя проверка: {collected}"
         )
         router_ids = [row["id"] for row in await pool.fetch("SELECT id FROM routers ORDER BY id")]
