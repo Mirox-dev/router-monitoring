@@ -31,13 +31,22 @@ def router_menu(router_id: str) -> InlineKeyboardMarkup:
 
 
 async def status(pool: asyncpg.Pool) -> str:
-    rows = await pool.fetch("""SELECT r.display_name, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
+    rows = await pool.fetch("""SELECT r.display_name, r.gateway, r.reverse_port, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
     if not rows:
         return "Роутеры ещё не зарегистрированы."
-    lines = ["Состояние роутеров:"]
+    lines = ["СОСТОЯНИЕ РОУТЕРОВ", ""]
     for row in rows:
         state = "✅" if row["transport_ok"] and row["foreign_ip_ok"] else "🔴"
-        lines.append(f"{state} {row['display_name']} · process={'ok' if row['process_ok'] else 'down'} · tun={'ok' if row['tun_ok'] else 'down'} · IP={'foreign' if row['foreign_ip_ok'] else 'not foreign'} · load={row['load1'] or '—'} · RAM={row['mem_available_kb'] or '—'} KiB · VSZ={row['vsz_kb'] or '—'} KiB")
+        collected = row["collected_at"].strftime("%H:%M:%S") if row["collected_at"] else "нет данных"
+        lines.extend([
+            f"{state} {row['display_name']}",
+            f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'} через {row['gateway']}:{row['reverse_port']}",
+            f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}; tun0: {'есть' if row['tun_ok'] else 'нет'}",
+            f"   Внешний IP: {'иностранный' if row['foreign_ip_ok'] else 'не иностранный'}",
+            f"   Нагрузка: {row['load1'] if row['load1'] is not None else '—'}; RAM свободно: {row['mem_available_kb'] if row['mem_available_kb'] is not None else '—'} KiB",
+            f"   VSZ: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} KiB; проверка: {collected}",
+            "",
+        ])
     return "\n".join(lines)
 
 
@@ -84,11 +93,28 @@ async def main() -> None:
     @dispatcher.callback_query(F.data.startswith("router:"))
     async def router_detail(callback: CallbackQuery) -> None:
         router_id = callback.data.split(":", 1)[1]
-        row = await pool.fetchrow("""SELECT r.display_name, h.* FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true WHERE r.id=$1""", router_id)
+        row = await pool.fetchrow("""SELECT r.display_name, r.gateway, r.reverse_port, h.* FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true WHERE r.id=$1""", router_id)
         if not row:
             await callback.answer("Роутер не найден", show_alert=True)
             return
-        text = f"{row['display_name']}\nprocess: {'ok' if row['process_ok'] else 'down'}\nservice: {'ok' if row['service_ok'] else 'down'}\ntun0: {'ok' if row['tun_ok'] else 'down'}\nforeign IP: {'ok' if row['foreign_ip_ok'] else 'down'}\nload: {row['load1'] or '—'}\nRAM: {row['mem_available_kb'] or '—'} KiB\nVSZ/RSS: {row['vsz_kb'] or '—'}/{row['rss_kb'] or '—'} KiB"
+        collected = row["collected_at"].strftime("%d.%m.%Y %H:%M:%S") if row["collected_at"] else "нет данных"
+        text = (
+            f"{row['display_name']}\n\n"
+            f"SSH-СОЕДИНЕНИЕ\n"
+            f"  Сервер: {row['gateway']}\n"
+            f"  Reverse SSH порт: {row['reverse_port']}\n"
+            f"  Состояние: {'подключён' if row['transport_ok'] else 'недоступен'}\n\n"
+            f"SING-BOX\n"
+            f"  Процесс: {'работает' if row['process_ok'] else 'не работает'}\n"
+            f"  Сервис init.d: {'активен' if row['service_ok'] else 'неактивен'}\n"
+            f"  tun0: {'есть' if row['tun_ok'] else 'нет'}\n"
+            f"  Внешний IP: {'иностранный' if row['foreign_ip_ok'] else 'не иностранный'}\n\n"
+            f"НАГРУЗКА\n"
+            f"  Load average: {row['load1'] if row['load1'] is not None else '—'}\n"
+            f"  RAM свободно: {row['mem_available_kb'] if row['mem_available_kb'] is not None else '—'} KiB\n"
+            f"  VSZ / RSS: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} / {row['rss_kb'] if row['rss_kb'] is not None else '—'} KiB\n\n"
+            f"Последняя проверка: {collected}"
+        )
         await callback.message.edit_text(text, reply_markup=router_menu(router_id))
         await callback.answer()
 

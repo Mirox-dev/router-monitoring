@@ -39,7 +39,8 @@ async def poll_once(settings: Settings, inventory, sessions, collector: SSHColle
             if record is None:
                 record = RouterRecord(id=router.id)
                 session.add(record)
-            record.display_name, record.model, record.gateway, record.reverse_port, record.egress_policy = router.display_name, router.model, router.gateway, router.reverse_port, router.egress_policy
+            gateway = inventory.gateway_for(router)
+            record.display_name, record.model, record.gateway, record.reverse_port, record.egress_policy = router.display_name, router.model, f"{router.gateway} ({gateway.host})", router.reverse_port, router.egress_policy
         await session.flush()
         for router, result, error in results:
             if result:
