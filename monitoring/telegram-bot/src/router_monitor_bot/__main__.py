@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import re
 
 import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.fsm.context import FSMContext
@@ -53,14 +56,15 @@ async def status(pool: asyncpg.Pool) -> str:
     lines = ["СОСТОЯНИЕ РОУТЕРОВ", ""]
     for row in rows:
         state = "🔴" if not row["transport_ok"] else ("✅" if row["foreign_ip_ok"] else "⚠️")
-        collected = row["collected_at"].strftime("%H:%M:%S") if row["collected_at"] else "нет данных"
+        gateway_match = re.search(r"\(([^)]+)\)$", row["gateway"] or "")
+        gateway_host = gateway_match.group(1) if gateway_match else row["gateway"]
+        if gateway_host == "host.docker.internal":
+            gateway_host = "95.181.174.224"
         lines.extend([
             f"{state} {row['display_name']}",
-            f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'} через {row['gateway']}:{row['reverse_port']}",
-            f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}; tun0: {'есть' if row['tun_ok'] else 'нет'}",
-            f"   Внешний IP: {'иностранный' if row['foreign_ip_ok'] else 'не иностранный'}",
-            f"   Нагрузка: {row['load1'] if row['load1'] is not None else '—'}; RAM свободно: {row['mem_available_kb'] if row['mem_available_kb'] is not None else '—'} KiB",
-            f"   VSZ: {row['vsz_kb'] if row['vsz_kb'] is not None else '—'} KiB; проверка: {collected}",
+            f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'}",
+            f"   ```ssh\n   ssh -J root@{gateway_host} -p {row['reverse_port']} root@127.0.0.1\n   ```",
+            f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}",
             "",
         ])
     return "\n".join(lines)
@@ -93,7 +97,7 @@ async def main() -> None:
     dsn = os.environ["ROUTER_MONITOR_DATABASE_URL"]
     alert_chat_id = os.environ["ROUTER_MONITOR_ALERT_CHAT_ID"]
     pool = await asyncpg.create_pool(dsn)
-    bot, dispatcher = Bot(token), Dispatcher()
+    bot, dispatcher = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)), Dispatcher()
     await bot.set_my_commands([
         BotCommand(command="start", description="Открыть главное меню"),
         BotCommand(command="routers", description="Показать роутеры"),
