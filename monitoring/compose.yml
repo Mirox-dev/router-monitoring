@@ -17,14 +17,21 @@ services:
   router_monitor:
     build: ./router-monitor
     profiles: [monitoring]
+    user: "10001:0"
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
     environment:
       ROUTER_MONITOR_DATABASE_URL: postgresql+psycopg://router_monitor:${ROUTER_MONITOR_POSTGRES_PASSWORD}@postgres:5432/router_monitor
       ROUTER_MONITOR_INVENTORY: /etc/router-monitor/inventory.yml
+      ROUTER_MONITOR_SSH_CLIENT_KEYS: /run/secrets/router-monitor-key
+      USER: root
+      LOGNAME: root
     volumes:
       - ./router-monitor/config/inventory.example.yml:/etc/router-monitor/inventory.yml:ro
+      - ./secrets/router-monitor-key:/run/secrets/router-monitor-key:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
     networks: [monitoring]
 
   telegram_bot:

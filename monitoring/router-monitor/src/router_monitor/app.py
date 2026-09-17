@@ -33,8 +33,12 @@ async def poll_once(settings: Settings, inventory, sessions, collector: SSHColle
     results = await asyncio.gather(*(poll(router) for router in inventory.routers))
     finished = datetime.now(timezone.utc)
     async with sessions() as session:
+        records = []
         for router, result, error in results:
-            await session.merge(RouterRecord(id=router.id, display_name=router.display_name, model=router.model, gateway=router.gateway, reverse_port=router.reverse_port, egress_policy=router.egress_policy))
+            records.append(RouterRecord(id=router.id, display_name=router.display_name, model=router.model, gateway=router.gateway, reverse_port=router.reverse_port, egress_policy=router.egress_policy))
+        session.add_all(records)
+        await session.flush()
+        for router, result, error in results:
             if result:
                 transport.labels(router.id).set(1)
                 vpn.labels(router.id).set(int(result.foreign_ip_ok))
