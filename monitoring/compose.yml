@@ -25,11 +25,13 @@ services:
       ROUTER_MONITOR_DATABASE_URL: postgresql+psycopg://router_monitor:${ROUTER_MONITOR_POSTGRES_PASSWORD}@postgres:5432/router_monitor
       ROUTER_MONITOR_INVENTORY: /etc/router-monitor/inventory.yml
       ROUTER_MONITOR_SSH_CLIENT_KEYS: /run/secrets/router-monitor-key
+      ROUTER_MONITOR_SSH_KNOWN_HOSTS: /run/secrets/known_hosts
       USER: root
       LOGNAME: root
     volumes:
       - ./router-monitor/config/inventory.example.yml:/etc/router-monitor/inventory.yml:ro
       - ./secrets/router-monitor-key:/run/secrets/router-monitor-key:ro
+      - ./secrets/known_hosts:/run/secrets/known_hosts:ro
     extra_hosts:
       - host.docker.internal:host-gateway
     networks: [monitoring]

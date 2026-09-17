@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     metrics_port: int = 9108
     ssh_user: str = "root"
     ssh_client_keys: str | None = None
+    ssh_known_hosts: str | None = None
 
     model_config = SettingsConfigDict(env_prefix="ROUTER_MONITOR_", env_file=".env", extra="ignore")
 

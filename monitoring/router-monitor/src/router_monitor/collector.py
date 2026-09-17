@@ -83,20 +83,20 @@ def parse_output(output: str) -> Collected:
 
 
 class SSHCollector:
-    def __init__(self, user: str, keys: list[str] | None, timeout: int = 10) -> None:
-        self.user, self.keys, self.timeout = user, keys, timeout
+    def __init__(self, user: str, keys: list[str] | None, timeout: int = 10, known_hosts: str | None = None) -> None:
+        self.user, self.keys, self.timeout, self.known_hosts = user, keys, timeout, known_hosts
 
     async def collect(self, router: Router, gateway: Gateway) -> Collected:
         import asyncssh
 
         gateway_conn = await asyncio.wait_for(
-            asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys),
+            asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
             timeout=self.timeout,
         )
         router_conn = None
         try:
             router_conn = await asyncio.wait_for(
-                asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn),
+                asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts),
                 timeout=self.timeout,
             )
             result = await router_conn.run(_COMMAND, check=False)
@@ -113,10 +113,10 @@ class SSHCollector:
     async def restart_sing_box(self, router: Router, gateway: Gateway) -> str:
         import asyncssh
 
-        gateway_conn = await asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys)
+        gateway_conn = await asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts)
         router_conn = None
         try:
-            router_conn = await asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn)
+            router_conn = await asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts)
             result = await router_conn.run("/etc/init.d/sing-box restart", check=False)
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"restart exited {result.exit_status}")

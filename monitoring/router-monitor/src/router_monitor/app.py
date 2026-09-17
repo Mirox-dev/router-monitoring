@@ -98,7 +98,7 @@ async def run(settings: Settings) -> None:
     await create_schema(engine)
     sessions = make_session_factory(engine)
     start_http_server(settings.metrics_port, addr=settings.metrics_host)
-    collector = SSHCollector(settings.ssh_user, settings.client_keys, settings.ssh_connect_timeout_seconds)
+    collector = SSHCollector(settings.ssh_user, settings.client_keys, settings.ssh_connect_timeout_seconds, settings.ssh_known_hosts)
     while True:
         await poll_once(settings, inventory, sessions, collector)
         await process_commands(inventory, sessions, collector)
