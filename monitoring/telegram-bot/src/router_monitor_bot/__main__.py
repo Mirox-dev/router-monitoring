@@ -4,6 +4,7 @@ import asyncio
 import os
 
 import asyncpg
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -50,12 +51,30 @@ async def router_list_menu(pool: asyncpg.Pool) -> InlineKeyboardMarkup:
 async def main() -> None:
     token = os.environ["ROUTER_MONITOR_BOT_TOKEN"]
     dsn = os.environ["ROUTER_MONITOR_DATABASE_URL"]
+    alert_chat_id = os.environ["ROUTER_MONITOR_ALERT_CHAT_ID"]
     pool = await asyncpg.create_pool(dsn)
     bot, dispatcher = Bot(token), Dispatcher()
 
     @dispatcher.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer("Центральный мониторинг роутеров", reply_markup=menu())
+
+    async def alert_webhook(request: web.Request) -> web.Response:
+        payload = await request.json()
+        lines = []
+        for alert in payload.get("alerts", []):
+            labels = alert.get("labels", {})
+            state = "RESOLVED" if alert.get("status") == "resolved" else "FIRING"
+            lines.append(f"{state}: {labels.get('alertname', 'router alert')} · {labels.get('router', labels.get('router_id', 'unknown'))}")
+        if lines:
+            await bot.send_message(alert_chat_id, "\n".join(lines))
+        return web.json_response({"accepted": len(lines)})
+
+    web_app = web.Application()
+    web_app.router.add_post("/alerts", alert_webhook)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", 8081).start()
 
     @dispatcher.callback_query(F.data == "routers")
     async def routers(callback: CallbackQuery) -> None:
@@ -112,6 +131,7 @@ async def main() -> None:
     try:
         await dispatcher.start_polling(bot)
     finally:
+        await runner.cleanup()
         await pool.close()
         await bot.session.close()
 
