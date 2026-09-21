@@ -54,6 +54,10 @@ def is_admin(user_id: int) -> bool:
     return str(user_id) in allowed
 
 
+def ssh_jump_chain(gateway_host: str) -> str:
+    return f"root@193.124.129.211,root@{gateway_host}"
+
+
 def router_menu(router_id: str, previous_id: str | None = None, next_id: str | None = None) -> InlineKeyboardMarkup:
     navigation = []
     if previous_id:
@@ -90,7 +94,7 @@ async def status(pool: asyncpg.Pool) -> str:
             f"{state} {row['display_name']}",
             f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'}",
             f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}",
-            f"   ```ssh\n   ssh -J root@{gateway_host} -p {row['reverse_port']} root@127.0.0.1\n   ```",
+            f"   ```ssh\n   ssh -J {ssh_jump_chain(gateway_host)} -p {row['reverse_port']} root@127.0.0.1\n   ```",
             "",
         ])
     return "\n".join(lines)
