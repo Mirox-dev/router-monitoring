@@ -283,7 +283,7 @@ async def main() -> None:
             await callback.answer("Нет доступа", show_alert=True)
             return
         router_id = callback.data.split(":", 1)[1]
-        await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status) VALUES ($1, 'health_check', $2, 'pending')", router_id, str(callback.from_user.id))
+        await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status, result) VALUES ($1, 'health_check', $2, 'pending', '{}'::jsonb)", router_id, str(callback.from_user.id))
         await callback.answer("Проверка поставлена в очередь")
 
     @dispatcher.callback_query(F.data.startswith("restart:"))
@@ -302,7 +302,7 @@ async def main() -> None:
             await callback.answer("Нет доступа", show_alert=True)
             return
         router_id = callback.data.split(":", 1)[1]
-        await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status) VALUES ($1, 'restart_sing_box', $2, 'pending')", router_id, str(callback.from_user.id))
+        await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status, result) VALUES ($1, 'restart_sing_box', $2, 'pending', '{}'::jsonb)", router_id, str(callback.from_user.id))
         await replace_menu(callback, "Перезапуск поставлен в очередь.", menu())
         await callback.answer()
 
