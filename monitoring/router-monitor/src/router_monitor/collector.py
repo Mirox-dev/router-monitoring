@@ -21,6 +21,8 @@ printf '\nIP2='; wget -qO- --timeout=8 https://api.ipify.org 2>/dev/null || true
 printf '\n'
 '''
 
+_IDENTITY_COMMAND = "cat /proc/sys/kernel/hostname 2>/dev/null || true"
+
 
 @dataclass(slots=True)
 class Collected:
@@ -103,6 +105,31 @@ class SSHCollector:
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"remote command exited {result.exit_status}")
             return parse_output(result.stdout, allowed_ips)
+        finally:
+            if router_conn:
+                router_conn.close()
+                await router_conn.wait_closed()
+            gateway_conn.close()
+            await gateway_conn.wait_closed()
+
+    async def probe_identity(self, router: Router, gateway: Gateway) -> str:
+        """Read only the router hostname through a candidate reverse tunnel."""
+        import asyncssh
+
+        gateway_conn = await asyncio.wait_for(
+            asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
+            timeout=self.timeout,
+        )
+        router_conn = None
+        try:
+            router_conn = await asyncio.wait_for(
+                asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts),
+                timeout=self.timeout,
+            )
+            result = await router_conn.run(_IDENTITY_COMMAND, check=False)
+            if result.exit_status not in (0, None):
+                raise RuntimeError(result.stderr.strip() or f"identity probe exited {result.exit_status}")
+            return result.stdout.strip()
         finally:
             if router_conn:
                 router_conn.close()
