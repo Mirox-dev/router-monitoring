@@ -28,7 +28,7 @@ routers:
     egress_policy: foreign
   - id: gribanov-telek
     display_name: gribanov-telek
-    gateway: gateway-a
+    gateway: gateway-02
     reverse_port: 2204
     model: xiaomi-mi-router-3-pro
     egress_policy: foreign

@@ -75,5 +75,5 @@ Inventory будет содержать router id/name, модель, gateway ho
 | router-01 | 2201 | central-monitor.example |
 | gribanov-apartments189 | 2202 | gateway-a |
 | router-03 | 2203 | gateway-02.example |
-| gribanov-telek | 2204 | gateway-a |
+| gribanov-telek | 2204 | gateway-02 |
 | gribanov-podval | 2205 | gateway-a |
