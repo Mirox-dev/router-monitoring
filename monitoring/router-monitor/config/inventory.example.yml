@@ -6,6 +6,8 @@ gateways:
     host: gateway-a.example.invalid
   gateway-02:
     host: gateway-02.example
+  gateway-03:
+    host: gateway-03.example.invalid
 
 routers:
   - id: gribanov-apartments163

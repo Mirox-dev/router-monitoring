@@ -13,10 +13,10 @@
 Telegram Bot + Monitor + PostgreSQL + Prometheus/Grafana/Alertmanager
                          (central-monitor.example)
                          /        |        \
-             SSH gateway 1   SSH gateway 2   локальные сервисы
-                   |               |
-             127.0.0.1:220x   127.0.0.1:220x
-                   \               /
+        SSH gateway 1   SSH gateway 2   SSH gateway 3
+             |               |               |
+       127.0.0.1:220x 127.0.0.1:220x 127.0.0.1:220x
+             \               |               /
                     OpenWrt routers
 ```
 
