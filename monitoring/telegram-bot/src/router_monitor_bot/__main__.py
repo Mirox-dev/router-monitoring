@@ -61,7 +61,7 @@ def is_admin(user_id: int) -> bool:
 
 
 def ssh_jump_chain(gateway_host: str) -> str:
-    return f"root@193.124.129.211,root@{gateway_host}"
+    return f"root@{gateway_host}"
 
 
 def router_menu(router_id: str, previous_id: str | None = None, next_id: str | None = None) -> InlineKeyboardMarkup:
