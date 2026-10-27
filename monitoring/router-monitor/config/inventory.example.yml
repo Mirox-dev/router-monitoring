@@ -4,10 +4,8 @@ central:
 gateways:
   gateway-a:
     host: gateway-a.example.invalid
-  gateway-02:
-    host: gateway-02.example
-  gateway-03:
-    host: gateway-03.example.invalid
+  gateway-msk1:
+    host: msk1.example
 
 routers:
   - id: gribanov-apartments163
@@ -24,13 +22,13 @@ routers:
     egress_policy: foreign
   - id: tatarskaya-1-7
     display_name: Tatarskaya-1-7
-    gateway: irving
+    gateway: central
     reverse_port: 2203
     model: xiaomi-mi-router-ax3000t
     egress_policy: foreign
   - id: gribanov-telek
     display_name: gribanov-telek
-    gateway: gateway-02
+    gateway: central
     reverse_port: 2204
     model: xiaomi-mi-router-3-pro
     egress_policy: foreign
