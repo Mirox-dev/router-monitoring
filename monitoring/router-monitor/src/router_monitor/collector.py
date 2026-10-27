@@ -29,6 +29,7 @@ class Collected:
     process_ok: bool
     service_ok: bool
     tun_ok: bool
+    egress_check_ok: bool
     foreign_ip_ok: bool
     load1: float | None
     cpu_percent: float | None
@@ -68,11 +69,20 @@ def parse_output(output: str, allowed_ips: set[str] | None = None) -> Collected:
     disk = re.search(r"\s(\d+)%\s", fields.get("DISK", ""))
     restart = re.search(r'"respawn_count"\s*:\s*(\d+)', fields.get("PROCD", ""))
     ips = [fields.get("IP1", "").strip(), fields.get("IP2", "").strip()]
+    valid_ips = []
+    for value in ips:
+        try:
+            ipaddress.ip_address(value)
+            valid_ips.append(True)
+        except ValueError:
+            valid_ips.append(False)
+    egress_check_ok = len(valid_ips) == 2 and all(valid_ips)
     return Collected(
         process_ok=bool(fields.get("PROCESS", "").strip()),
         service_ok=any(word in fields.get("SERVICE", "").lower() for word in ("running", "started")),
         tun_ok="tun0" in fields.get("TUN", "") and "UP" in fields.get("TUN", ""),
-        foreign_ip_ok=len(ips) == 2 and all(ip in (allowed_ips or set()) for ip in ips),
+        egress_check_ok=egress_check_ok,
+        foreign_ip_ok=egress_check_ok and all(ip in (allowed_ips or set()) for ip in ips),
         load1=_number(fields.get("LOAD", "")),
         cpu_percent=_number(ps[0]) if ps else None,
         vsz_kb=int(float(ps[1])) if len(ps) > 1 and ps[1].replace('.', '', 1).isdigit() else None,
@@ -80,7 +90,7 @@ def parse_output(output: str, allowed_ips: set[str] | None = None) -> Collected:
         mem_available_kb=int(_number(fields.get("MEM", "")) or 0) or None,
         disk_used_percent=float(disk.group(1)) if disk else None,
         restart_count=int(restart.group(1)) if restart else None,
-        checks={"ip1": ips[0], "ip2": ips[1]},
+        checks={"ip1": ips[0], "ip2": ips[1], "egress_check_ok": egress_check_ok},
     )
 
 

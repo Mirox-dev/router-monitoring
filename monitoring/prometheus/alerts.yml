@@ -3,14 +3,30 @@ groups:
     interval: 30s
     rules:
       - alert: RouterTransportDown
-        expr: router_transport_ok == 0
+        expr: avg_over_time(router_transport_ok[5m]) < 0.2
         for: 2m
+        keep_firing_for: 5m
         labels: {severity: critical}
         annotations:
           summary: "Reverse SSH transport is down"
+      - alert: RouterTelemetryUnavailable
+        expr: router_transport_ok == 1 and avg_over_time(router_collection_ok[5m]) < 0.2
+        for: 5m
+        keep_firing_for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Router is reachable, but telemetry collection is failing"
+      - alert: RouterEgressCheckUnavailable
+        expr: router_transport_ok == 1 and avg_over_time(router_collection_ok[5m]) > 0.8 and avg_over_time(router_egress_check_ok[5m]) < 0.2
+        for: 5m
+        keep_firing_for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "External IP checks are unavailable"
       - alert: RouterForeignEgressDown
-        expr: router_vpn_ok == 0
-        for: 3m
+        expr: router_egress_check_ok == 1 and avg_over_time(router_vpn_ok[5m]) < 0.2
+        for: 2m
+        keep_firing_for: 5m
         labels: {severity: critical}
         annotations:
           summary: "Router has no foreign egress IP"

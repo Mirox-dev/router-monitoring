@@ -1,6 +1,6 @@
 route:
   receiver: telegram-webhook
-  group_by: [alertname, router_id]
+  group_by: [alertname, router]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h

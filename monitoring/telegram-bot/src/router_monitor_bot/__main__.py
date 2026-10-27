@@ -7,15 +7,21 @@ import os
 import re
 
 import asyncpg
-from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from aiohttp import web
 
 
 class AddExternalIP(StatesGroup):
@@ -80,11 +86,13 @@ async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboar
 
 
 async def status(pool: asyncpg.Pool) -> str:
-    rows = await pool.fetch("""SELECT r.display_name, r.gateway, r.reverse_port, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
+    rows = await pool.fetch("""SELECT r.display_name, r.gateway, r.reverse_port, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at, h.checks FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
     if not rows:
         return "Роутеры ещё не зарегистрированы."
     lines = ["СОСТОЯНИЕ РОУТЕРОВ", ""]
     for row in rows:
+        checks_raw = row["checks"]
+        checks = json.loads(checks_raw) if isinstance(checks_raw, str) else (checks_raw or {})
         state = "🔴" if not row["transport_ok"] else ("✅" if row["foreign_ip_ok"] else "⚠️")
         gateway_match = re.search(r"\(([^)]+)\)$", row["gateway"] or "")
         gateway_host = gateway_match.group(1) if gateway_match else row["gateway"]
@@ -94,6 +102,7 @@ async def status(pool: asyncpg.Pool) -> str:
             f"{state} {row['display_name']}",
             f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'}",
             f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}",
+            *( ["   Телеметрия устарела: последний опрос не завершился"] if checks.get("telemetry_stale") else [] ),
             f"   ```ssh\n   ssh -J {ssh_jump_chain(gateway_host)} -p {row['reverse_port']} root@127.0.0.1\n   ```",
             "",
         ])
@@ -243,6 +252,7 @@ async def main() -> None:
         collected = row["collected_at"].strftime("%d.%m.%Y %H:%M:%S") if row["collected_at"] else "нет данных"
         checks_raw = row["checks"]
         checks = json.loads(checks_raw) if isinstance(checks_raw, str) else (checks_raw or {})
+        egress_check_ok = checks.get("egress_check_ok", True)
         ip1 = checks.get("ip1") or "нет данных"
         ip2 = checks.get("ip2") or "нет данных"
         text = (
@@ -259,7 +269,8 @@ async def main() -> None:
             f"  tun0: {'есть и поднят' if row['tun_ok'] else 'отсутствует или выключен'}\n"
             f"  IP через ifconfig.me: {ip1}\n"
             f"  IP через api.ipify.org: {ip2}\n"
-            f"  Проверка allowlist: {'пройдена' if row['foreign_ip_ok'] else 'не пройдена'}\n\n"
+            f"  Проверка allowlist: {'пройдена' if row['foreign_ip_ok'] else ('не пройдена' if egress_check_ok else 'нет данных')}\n"
+            f"  Сбор телеметрии: {'данные актуальны' if not checks.get('telemetry_stale') else 'ошибка; ниже последние известные данные'}\n\n"
             f"НАГРУЗКА\n"
             f"  Load average: {row['load1'] if row['load1'] is not None else '—'}\n"
             f"  CPU процесса: {row['cpu_percent'] if row['cpu_percent'] is not None else '—'} %\n"

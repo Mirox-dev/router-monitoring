@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prometheus_client import Gauge, start_http_server
 from sqlalchemy import select
@@ -15,6 +15,8 @@ from .settings import Settings
 
 logger = logging.getLogger(__name__)
 transport = Gauge("router_transport_ok", "Reverse SSH transport availability", ["router"])
+collection = Gauge("router_collection_ok", "Full router telemetry collection succeeded", ["router"])
+egress_check = Gauge("router_egress_check_ok", "Both external IP providers returned valid IPs", ["router"])
 vpn = Gauge("router_vpn_ok", "Foreign egress IP availability", ["router"])
 load = Gauge("router_load1", "Router one minute load average", ["router"])
 memory = Gauge("router_mem_available_kb", "Available memory in KiB", ["router"])
@@ -42,7 +44,8 @@ async def discover_gateway(router, inventory, collector: SSHCollector, preferred
         try:
             identity = await collector.probe_identity(router, inventory.gateway_for(router.model_copy(update={"gateway": key})))
             return key if _identity_matches(router, identity) else None
-        except Exception:
+        except Exception:  # gateway connection failures vary by backend
+            logger.debug("Gateway probe failed for router=%s gateway=%s", router.id, key, exc_info=True)
             return None
 
     matches = [match for match in await asyncio.gather(*(probe(key) for key in candidates)) if match]
@@ -57,13 +60,40 @@ async def relocate_if_needed(router, inventory, collector: SSHCollector, force_s
         try:
             await collector.probe_identity(router, inventory.gateway_for(router))
             return None, None
-        except Exception:
-            pass
+        except Exception:  # probe failure triggers gateway discovery
+            logger.debug("Current gateway probe failed for router=%s", router.id, exc_info=True)
     discovered = await discover_gateway(router, inventory, collector, preferred_key=old_gateway)
     if discovered and discovered != old_gateway:
         router.gateway = discovered
         return old_gateway, discovered
     return None, discovered
+
+
+async def poll_router(router, inventory, collector: SSHCollector, allowed_ips: set[str]):
+    """Separate tunnel reachability from failures in the heavier telemetry command."""
+    try:
+        result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
+        return router, result, None, True, None, None
+    except Exception as exc:  # noqa: BLE001 — SSH and remote command errors vary by backend
+        error = str(exc)
+
+    try:
+        identity = await collector.probe_identity(router, inventory.gateway_for(router))
+        if _identity_matches(router, identity):
+            return router, None, error, True, None, None
+    except Exception:
+        logger.debug("Identity probe failed for router=%s", router.id, exc_info=True)
+
+    old_gateway = router.gateway
+    moved_from, moved_to = await relocate_if_needed(router, inventory, collector, force_scan=True)
+    transport_ok = bool(moved_to)
+    if moved_to and moved_to != old_gateway:
+        try:
+            result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
+            return router, result, None, True, moved_from, moved_to
+        except Exception as moved_exc:  # noqa: BLE001 — isolate this router's second attempt
+            error = str(moved_exc)
+    return router, None, error, transport_ok, moved_from, moved_to
 
 
 async def apply_saved_bindings(inventory, sessions) -> None:
@@ -80,29 +110,14 @@ async def apply_saved_bindings(inventory, sessions) -> None:
 
 
 async def poll_once(settings: Settings, inventory, sessions, collector: SSHCollector) -> None:
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     async with sessions() as config_session:
         allowed_ips = {row[0] for row in (await config_session.execute(select(ExternalIP.value))).all()}
-    async def poll(router):
-        moved_from = moved_to = None
-        try:
-            result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
-            return router, result, None, moved_from, moved_to
-        except Exception as exc:  # one unavailable router must not stop the cycle
-            moved_from, moved_to = await relocate_if_needed(router, inventory, collector)
-            if moved_to:
-                try:
-                    result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
-                    return router, result, None, moved_from, moved_to
-                except Exception as moved_exc:
-                    return router, None, str(moved_exc), moved_from, moved_to
-            return router, None, str(exc), moved_from, moved_to
-
-    results = await asyncio.gather(*(poll(router) for router in inventory.routers))
-    finished = datetime.now(timezone.utc)
+    results = await asyncio.gather(*(poll_router(router, inventory, collector, allowed_ips) for router in inventory.routers))
+    finished = datetime.now(UTC)
     async with sessions() as session:
         existing = {row.id: row for row in (await session.execute(select(RouterRecord).where(RouterRecord.id.in_([router.id for router in inventory.routers])))).scalars()}
-        for router, result, error, moved_from, moved_to in results:
+        for router, result, error, _, moved_from, moved_to in results:
             record = existing.get(router.id)
             if record is None:
                 record = RouterRecord(id=router.id)
@@ -112,20 +127,27 @@ async def poll_once(settings: Settings, inventory, sessions, collector: SSHColle
             if moved_from and moved_to:
                 session.add(Event(router_id=router.id, kind="gateway_changed", severity="info", payload={"from": moved_from, "to": moved_to, "reason": "automatic_discovery"}))
         await session.flush()
-        for router, result, error, _, _ in results:
+        for router, result, error, transport_ok, _, _ in results:
+            transport.labels(router.id).set(int(transport_ok))
             if result:
-                transport.labels(router.id).set(1)
-                vpn.labels(router.id).set(int(result.foreign_ip_ok))
+                collection.labels(router.id).set(1)
+                egress_check.labels(router.id).set(int(result.egress_check_ok))
+                if result.egress_check_ok:
+                    vpn.labels(router.id).set(int(result.foreign_ip_ok))
                 for metric, value in ((load, result.load1), (memory, result.mem_available_kb), (vsz, result.vsz_kb)):
                     if value is not None:
                         metric.labels(router.id).set(value)
-                sample = HealthSample(router_id=router.id, collected_at=finished, window_started_at=started, window_finished_at=finished, transport_ok=True, process_ok=result.process_ok, service_ok=result.service_ok, tun_ok=result.tun_ok, foreign_ip_ok=result.foreign_ip_ok, load1=result.load1, cpu_percent=result.cpu_percent, vsz_kb=result.vsz_kb, rss_kb=result.rss_kb, mem_available_kb=result.mem_available_kb, disk_used_percent=result.disk_used_percent, restart_count=result.restart_count, checks=result.checks)
+                checks = {**result.checks, "telemetry_stale": False}
+                sample = HealthSample(router_id=router.id, collected_at=finished, window_started_at=started, window_finished_at=finished, transport_ok=True, process_ok=result.process_ok, service_ok=result.service_ok, tun_ok=result.tun_ok, foreign_ip_ok=result.foreign_ip_ok, load1=result.load1, cpu_percent=result.cpu_percent, vsz_kb=result.vsz_kb, rss_kb=result.rss_kb, mem_available_kb=result.mem_available_kb, disk_used_percent=result.disk_used_percent, restart_count=result.restart_count, checks=checks)
             else:
-                transport.labels(router.id).set(0)
-                vpn.labels(router.id).set(0)
-                sample = HealthSample(router_id=router.id, collected_at=finished, window_started_at=started, window_finished_at=finished, error=error, checks={})
+                collection.labels(router.id).set(0)
+                egress_check.labels(router.id).set(0)
+                previous = (await session.execute(select(HealthSample).where(HealthSample.router_id == router.id).order_by(HealthSample.collected_at.desc()).limit(1))).scalars().first()
+                previous_checks = dict(previous.checks or {}) if previous else {}
+                previous_checks.update({"telemetry_stale": True, "egress_check_ok": False})
+                sample = HealthSample(router_id=router.id, collected_at=finished, window_started_at=started, window_finished_at=finished, transport_ok=transport_ok, process_ok=previous.process_ok if previous else False, service_ok=previous.service_ok if previous else False, tun_ok=previous.tun_ok if previous else False, foreign_ip_ok=previous.foreign_ip_ok if previous else False, load1=previous.load1 if previous else None, cpu_percent=previous.cpu_percent if previous else None, vsz_kb=previous.vsz_kb if previous else None, rss_kb=previous.rss_kb if previous else None, mem_available_kb=previous.mem_available_kb if previous else None, disk_used_percent=previous.disk_used_percent if previous else None, restart_count=previous.restart_count if previous else None, checks=previous_checks, error=error)
             session.add(sample)
-            logger.info("router=%s transport=%s vpn=%s error=%s", router.id, bool(result), result.foreign_ip_ok if result else False, error)
+            logger.info("router=%s transport=%s collection=%s egress_check=%s vpn=%s error=%s", router.id, transport_ok, bool(result), result.egress_check_ok if result else False, result.foreign_ip_ok if result and result.egress_check_ok else None, error)
         await session.commit()
 
 
@@ -136,11 +158,11 @@ async def process_commands(inventory, sessions, collector: SSHCollector) -> None
         commands = list(result.scalars())
         for command in commands:
             command.status = "running"
-            command.started_at = datetime.now(timezone.utc)
+            command.started_at = datetime.now(UTC)
         await session.commit()
     for command in commands:
         router = router_map.get(command.router_id)
-        finished = datetime.now(timezone.utc)
+        finished = datetime.now(UTC)
         payload: dict[str, object]
         status = "failed"
         try:
@@ -160,7 +182,7 @@ async def process_commands(inventory, sessions, collector: SSHCollector) -> None
             else:
                 raise ValueError("action is not allowlisted")
             status = "completed"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — persist command failures for the bot
             payload = {"error": str(exc)}
         async with sessions() as session:
             current = await session.get(MonitorCommand, command.id)

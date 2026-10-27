@@ -17,7 +17,7 @@ IP2=1.1.1.1
         {"8.8.8.8", "1.1.1.1"},
     )
     assert result.process_ok and result.service_ok and result.tun_ok
-    assert result.foreign_ip_ok
+    assert result.egress_check_ok and result.foreign_ip_ok
     assert result.load1 == 0.3
     assert result.vsz_kb == 140000 and result.rss_kb == 90000
     assert result.restart_count == 2
@@ -30,4 +30,16 @@ def test_private_ip_is_not_foreign() -> None:
 
 def test_same_allowed_ip_from_both_endpoints_is_accepted() -> None:
     result = parse_output("IP1=203.0.113.10\nIP2=203.0.113.10\n", {"203.0.113.10"})
-    assert result.foreign_ip_ok
+    assert result.egress_check_ok and result.foreign_ip_ok
+
+
+def test_missing_external_ip_is_unknown_not_a_failed_foreign_ip_check() -> None:
+    result = parse_output("IP1=8.8.8.8\nIP2=\n", {"8.8.8.8"})
+    assert not result.egress_check_ok
+    assert not result.foreign_ip_ok
+
+
+def test_valid_but_unapproved_external_ip_is_a_failed_foreign_ip_check() -> None:
+    result = parse_output("IP1=8.8.8.8\nIP2=1.1.1.1\n", {"8.8.8.8"})
+    assert result.egress_check_ok
+    assert not result.foreign_ip_ok
