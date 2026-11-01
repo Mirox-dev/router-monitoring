@@ -174,7 +174,22 @@ async def process_commands(inventory, sessions, collector: SSHCollector) -> None
                     allowed_ips = {row[0] for row in (await config_session.execute(select(ExternalIP.value))).all()}
                 moved_from, moved_to = await relocate_if_needed(router, inventory, collector, force_scan=True)
                 collected = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
-                payload = {"process_ok": collected.process_ok, "tun_ok": collected.tun_ok, "foreign_ip_ok": collected.foreign_ip_ok}
+                payload = {
+                    "gateway": inventory.gateway_for(router).host,
+                    "transport_ok": True,
+                    "process_ok": collected.process_ok,
+                    "service_ok": collected.service_ok,
+                    "tun_ok": collected.tun_ok,
+                    "egress_check_ok": collected.egress_check_ok,
+                    "foreign_ip_ok": collected.foreign_ip_ok,
+                    "ip1": collected.checks.get("ip1"),
+                    "ip2": collected.checks.get("ip2"),
+                    "load1": collected.load1,
+                    "mem_available_kb": collected.mem_available_kb,
+                    "vsz_kb": collected.vsz_kb,
+                    "rss_kb": collected.rss_kb,
+                    "restart_count": collected.restart_count,
+                }
                 if moved_from and moved_to:
                     payload.update({"gateway_changed": True, "from": moved_from, "to": moved_to})
             elif command.action == "restart_sing_box":

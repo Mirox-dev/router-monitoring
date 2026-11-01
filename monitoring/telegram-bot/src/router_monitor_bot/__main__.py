@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import re
 
@@ -28,7 +29,9 @@ class AddExternalIP(StatesGroup):
     waiting_for_ip = State()
 
 
+logger = logging.getLogger(__name__)
 last_screen_by_chat: dict[int, int] = {}
+health_check_tasks: set[asyncio.Task[None]] = set()
 
 
 async def send_screen(bot: Bot, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, *, old_message_id: int | None = None, user_message: Message | None = None) -> None:
@@ -78,6 +81,82 @@ def router_menu(router_id: str, previous_id: str | None = None, next_id: str | N
         rows.append(navigation)
     rows.append([InlineKeyboardButton(text="◀️ Назад к роутерам", callback_data="routers")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def format_health_check_result(router_name: str, status: str, result: dict) -> str:
+    if status != "completed":
+        return (
+            f"Проверка роутера {router_name} не выполнена.\n"
+            f"Причина: {result.get('error', 'неизвестная ошибка')}"
+        )
+
+    egress_ok = result.get("egress_check_ok", False)
+    foreign_ok = result.get("foreign_ip_ok", False)
+    lines = [
+        f"РЕЗУЛЬТАТ ПРОВЕРКИ: {router_name}",
+        "",
+        f"SSH: {'подключён' if result.get('transport_ok') else 'недоступен'}",
+        f"Сервер: {result.get('gateway', 'неизвестен')}",
+        f"sing-box: {'работает' if result.get('process_ok') else 'не работает'}",
+        f"Сервис init.d: {'активен' if result.get('service_ok') else 'неактивен'}",
+        f"tun0: {'поднят' if result.get('tun_ok') else 'отсутствует или выключен'}",
+        f"Внешний IP ifconfig.me: {result.get('ip1') or 'нет данных'}",
+        f"Внешний IP api.ipify.org: {result.get('ip2') or 'нет данных'}",
+        "Allowlist: " + (
+            "пройдена" if foreign_ok else ("не пройдена" if egress_ok else "нет данных")
+        ),
+    ]
+    if result.get("gateway_changed"):
+        lines.insert(4, f"Переподключение найдено: {result.get('from')} → {result.get('to')}")
+    lines.extend([
+        "",
+        f"Load average: {result.get('load1') if result.get('load1') is not None else '—'}",
+        f"RAM свободно: {result.get('mem_available_kb') if result.get('mem_available_kb') is not None else '—'} KiB",
+        f"VSZ / RSS: {result.get('vsz_kb') if result.get('vsz_kb') is not None else '—'} / {result.get('rss_kb') if result.get('rss_kb') is not None else '—'} KiB",
+        f"Рестарты sing-box: {result.get('restart_count') if result.get('restart_count') is not None else '—'}",
+    ])
+    return "\n".join(lines)
+
+
+async def deliver_health_check_result(
+    pool: asyncpg.Pool, bot: Bot, chat_id: int, router_id: str, command_id
+) -> None:
+    try:
+        deadline = asyncio.get_running_loop().time() + 180
+        while asyncio.get_running_loop().time() < deadline:
+            row = await pool.fetchrow(
+                "SELECT status, result FROM monitor_commands WHERE id=$1", command_id
+            )
+            if row and row["status"] in {"completed", "failed"}:
+                router_name = await pool.fetchval(
+                    "SELECT display_name FROM routers WHERE id=$1", router_id
+                )
+                result = row["result"] or {}
+                if isinstance(result, str):
+                    result = json.loads(result)
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="К карточке роутера", callback_data=f"router:{router_id}")]
+                ])
+                await send_screen(
+                    bot,
+                    chat_id,
+                    format_health_check_result(router_name or router_id, row["status"], result),
+                    keyboard,
+                )
+                return
+            await asyncio.sleep(1)
+
+        await send_screen(
+            bot,
+            chat_id,
+            "Проверка ещё не завершилась за 3 минуты. Монитор продолжает её выполнять; попробуйте открыть карточку позже.",
+        )
+    except Exception:
+        logger.exception("Failed waiting for health check command %s", command_id)
+        try:
+            await bot.send_message(chat_id, "Не удалось получить результат проверки из базы мониторинга.")
+        except Exception:
+            logger.exception("Failed to notify chat %s about health check", chat_id)
 
 
 async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -294,8 +373,20 @@ async def main() -> None:
             await callback.answer("Нет доступа", show_alert=True)
             return
         router_id = callback.data.split(":", 1)[1]
-        await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status, result) VALUES ($1, 'health_check', $2, 'pending', '{}'::jsonb)", router_id, str(callback.from_user.id))
-        await callback.answer("Проверка поставлена в очередь")
+        command_id = await pool.fetchval(
+            "INSERT INTO monitor_commands (router_id, action, requested_by, status, result) "
+            "VALUES ($1, 'health_check', $2, 'pending', '{}'::jsonb) RETURNING id",
+            router_id,
+            str(callback.from_user.id),
+        )
+        await callback.answer("Проверка запущена. Результат придёт сообщением.")
+        task = asyncio.create_task(
+            deliver_health_check_result(
+                pool, bot, callback.message.chat.id, router_id, command_id
+            )
+        )
+        health_check_tasks.add(task)
+        task.add_done_callback(health_check_tasks.discard)
 
     @dispatcher.callback_query(F.data.startswith("restart:"))
     async def restart_prompt(callback: CallbackQuery) -> None:
@@ -327,6 +418,10 @@ async def main() -> None:
     try:
         await dispatcher.start_polling(bot)
     finally:
+        for task in health_check_tasks:
+            task.cancel()
+        if health_check_tasks:
+            await asyncio.gather(*health_check_tasks, return_exceptions=True)
         await runner.cleanup()
         await pool.close()
         await bot.session.close()
