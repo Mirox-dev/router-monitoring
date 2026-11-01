@@ -3,7 +3,8 @@ central:
 
 gateways:
   gateway-msk1:
-    host: msk1.example
+    host: 127.0.0.1
+    transport: tcp_proxy
 
 routers:
   - id: gribanov-apartments163

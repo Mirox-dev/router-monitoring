@@ -106,6 +106,8 @@ class SSHCollector:
     async def _connect_gateway(self, gateway: Gateway):
         import asyncssh
 
+        if gateway.transport == "tcp_proxy":
+            return None
         try:
             return await asyncio.wait_for(
                 asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
@@ -119,12 +121,33 @@ class SSHCollector:
     async def _connect_router(self, router: Router, gateway: Gateway, gateway_conn):
         import asyncssh
 
+        if gateway.transport == "tcp_proxy":
+            host = gateway.host
+            port = router.reverse_port
+            tunnel = None
+        else:
+            host = "127.0.0.1"
+            port = router.reverse_port
+            tunnel = gateway_conn
         try:
+            connect_args = {
+                "port": port,
+                "username": self.user,
+                "client_keys": self.keys,
+                "known_hosts": self.known_hosts,
+            }
+            if tunnel is not None:
+                connect_args["tunnel"] = tunnel
             return await asyncio.wait_for(
-                asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts),
+                asyncssh.connect(host, **connect_args),
                 timeout=self.timeout,
             )
         except Exception as exc:
+            if gateway.transport == "tcp_proxy":
+                raise RuntimeError(
+                    f"Не удалось подключиться к TCP-прокси шлюза {gateway.host}:{port} "
+                    f"для reverse-порта роутера {router.reverse_port}: {describe_error(exc)}"
+                ) from exc
             raise RuntimeError(
                 f"Шлюз {gateway.host} доступен, но SSH к роутеру на reverse-порту "
                 f"127.0.0.1:{router.reverse_port} не установлено: {describe_error(exc)}"
@@ -143,8 +166,9 @@ class SSHCollector:
             if router_conn:
                 router_conn.close()
                 await router_conn.wait_closed()
-            gateway_conn.close()
-            await gateway_conn.wait_closed()
+            if gateway_conn:
+                gateway_conn.close()
+                await gateway_conn.wait_closed()
 
     async def probe_identity(self, router: Router, gateway: Gateway) -> str:
         """Read only the router hostname through a candidate reverse tunnel."""
@@ -160,16 +184,15 @@ class SSHCollector:
             if router_conn:
                 router_conn.close()
                 await router_conn.wait_closed()
-            gateway_conn.close()
-            await gateway_conn.wait_closed()
+            if gateway_conn:
+                gateway_conn.close()
+                await gateway_conn.wait_closed()
 
     async def restart_sing_box(self, router: Router, gateway: Gateway) -> str:
-        import asyncssh
-
-        gateway_conn = await asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts)
+        gateway_conn = await self._connect_gateway(gateway)
         router_conn = None
         try:
-            router_conn = await asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts)
+            router_conn = await self._connect_router(router, gateway, gateway_conn)
             result = await router_conn.run("/etc/init.d/sing-box restart", check=False)
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"restart exited {result.exit_status}")
@@ -178,5 +201,6 @@ class SSHCollector:
             if router_conn:
                 router_conn.close()
                 await router_conn.wait_closed()
-            gateway_conn.close()
-            await gateway_conn.wait_closed()
+            if gateway_conn:
+                gateway_conn.close()
+                await gateway_conn.wait_closed()

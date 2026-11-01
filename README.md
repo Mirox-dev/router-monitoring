@@ -28,3 +28,8 @@ docker compose --env-file monitoring/.env -f monitoring/compose.yml up -d postgr
 
 Секреты и реальные адреса не хранятся в репозитории. Перед deployment необходимо
 заполнить inventory и отдельно подтвердить изменения на реальных серверах.
+
+Для Cloudflare Access TCP-прокси скопируйте
+`monitoring/cloudflare-access.env.example` в
+`monitoring/secrets/cloudflare-access.env` и заполните Service Token. Этот файл
+не коммитится.

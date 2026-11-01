@@ -12,17 +12,27 @@
 ```text
 Telegram Bot + Monitor + PostgreSQL + Prometheus/Grafana/Alertmanager
                          (central-monitor.example)
-                         /        |        \
-        SSH gateway 1   SSH gateway 2   SSH gateway 3
-             |               |               |
-       127.0.0.1:220x 127.0.0.1:220x 127.0.0.1:220x
-             \               |               /
+                         |  Cloudflare Access TCP clients
+                         |  router-2201..router-2209.balaganet.online
+                         |  (local loopback 2201–2209)
+                         |  Cloudflare Tunnel
+                         |  (connector on msk1)
+                    msk1 127.0.0.1:2201–2209
+                         |
                     OpenWrt routers
 ```
 
 Центральный сервер — единственная точка запуска Telegram-бота и источник истины для
 состояния мониторинга. Gateway-серверы сохраняют только собственные systemd
-journal и обслуживают reverse SSH.
+journal и обслуживают reverse SSH. Центральный монитор получает TCP-доступ к
+портам msk1 через защищённые Access-приложения. Connector находится на msk1;
+на роутерах не устанавливается cloudflared.
+
+Для `gateway-msk1` inventory задаёт `transport: tcp_proxy`. Девять клиентских
+процессов `cloudflared access tcp` на центральном сервере слушают loopback
+2201–2209 в общем network namespace с `router-monitor`. Для каждого входящего
+TCP-порта есть отдельный hostname и Access Service Auth policy. Токен хранится
+в root-only файле `monitoring/secrets/cloudflare-access.env`.
 
 ## Слои проверок
 
@@ -86,6 +96,8 @@ Monitor отдельно проверяет доступность SSH-тунн�
 ## Безопасность
 
 - Секреты только через environment/secrets, не в inventory и коде.
+- Доступ через Cloudflare ограничен девятью TCP-портами reverse SSH и Service
+  Token центрального сборщика; SSH-порт msk1 не публикуется.
 - SSH-команды allowlist'ятся на стороне monitor; произвольный shell из Telegram
   запрещён.
 - Операции restart/reconnect требуют подтверждения и записываются в audit log.

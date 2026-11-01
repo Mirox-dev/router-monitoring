@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field
 class Gateway(BaseModel):
     host: str
     ssh_port: int = 22
+    transport: Literal["ssh_gateway", "tcp_proxy"] = "ssh_gateway"
 
 
 class Router(BaseModel):

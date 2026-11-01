@@ -1,3 +1,12 @@
+x-cloudflared-access-common: &cloudflared-access-common
+  image: cloudflare/cloudflared:2026.10.7
+  profiles: [monitoring]
+  restart: unless-stopped
+  depends_on: [router_monitor]
+  network_mode: "service:router_monitor"
+  env_file:
+    - ./secrets/cloudflare-access.env
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -35,6 +44,42 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     networks: [monitoring]
+
+  cloudflared_access_2201:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2201.balaganet.online", "--url", "127.0.0.1:2201"]
+
+  cloudflared_access_2202:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2202.balaganet.online", "--url", "127.0.0.1:2202"]
+
+  cloudflared_access_2203:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2203.balaganet.online", "--url", "127.0.0.1:2203"]
+
+  cloudflared_access_2204:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2204.balaganet.online", "--url", "127.0.0.1:2204"]
+
+  cloudflared_access_2205:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2205.balaganet.online", "--url", "127.0.0.1:2205"]
+
+  cloudflared_access_2206:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2206.balaganet.online", "--url", "127.0.0.1:2206"]
+
+  cloudflared_access_2207:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2207.balaganet.online", "--url", "127.0.0.1:2207"]
+
+  cloudflared_access_2208:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2208.balaganet.online", "--url", "127.0.0.1:2208"]
+
+  cloudflared_access_2209:
+    <<: *cloudflared-access-common
+    command: ["access", "tcp", "--hostname", "router-2209.balaganet.online", "--url", "127.0.0.1:2209"]
 
   telegram_bot:
     build: ./telegram-bot
