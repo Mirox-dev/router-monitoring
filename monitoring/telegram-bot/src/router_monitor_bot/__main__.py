@@ -32,6 +32,7 @@ class AddExternalIP(StatesGroup):
 logger = logging.getLogger(__name__)
 last_screen_by_chat: dict[int, int] = {}
 health_check_tasks: set[asyncio.Task[None]] = set()
+active_health_checks: dict[int, str] = {}
 
 
 async def send_screen(bot: Bot, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, *, old_message_id: int | None = None, user_message: Message | None = None) -> None:
@@ -93,7 +94,7 @@ def format_health_check_result(router_name: str, status: str, result: dict) -> s
     egress_ok = result.get("egress_check_ok", False)
     foreign_ok = result.get("foreign_ip_ok", False)
     lines = [
-        f"РЕЗУЛЬТАТ ПРОВЕРКИ: {router_name}",
+        f"СТАТУС РОУТЕРА: {router_name}",
         "",
         f"SSH: {'подключён' if result.get('transport_ok') else 'недоступен'}",
         f"Сервер: {result.get('gateway', 'неизвестен')}",
@@ -122,11 +123,13 @@ async def deliver_health_check_result(
     pool: asyncpg.Pool, bot: Bot, chat_id: int, router_id: str, command_id
 ) -> None:
     try:
-        deadline = asyncio.get_running_loop().time() + 180
-        while asyncio.get_running_loop().time() < deadline:
+        while True:
             row = await pool.fetchrow(
                 "SELECT status, result FROM monitor_commands WHERE id=$1", command_id
             )
+            if row is None:
+                await send_screen(bot, chat_id, "Команда проверки не найдена в очереди.")
+                return
             if row and row["status"] in {"completed", "failed"}:
                 router_name = await pool.fetchval(
                     "SELECT display_name FROM routers WHERE id=$1", router_id
@@ -134,29 +137,43 @@ async def deliver_health_check_result(
                 result = row["result"] or {}
                 if isinstance(result, str):
                     result = json.loads(result)
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="К карточке роутера", callback_data=f"router:{router_id}")]
-                ])
+                router_ids = [item["id"] for item in await pool.fetch("SELECT id FROM routers ORDER BY id")]
+                position = router_ids.index(router_id)
+                previous_id = router_ids[position - 1] if position > 0 else None
+                next_id = router_ids[position + 1] if position + 1 < len(router_ids) else None
                 await send_screen(
                     bot,
                     chat_id,
                     format_health_check_result(router_name or router_id, row["status"], result),
-                    keyboard,
+                    router_menu(router_id, previous_id, next_id),
                 )
                 return
             await asyncio.sleep(1)
-
-        await send_screen(
-            bot,
-            chat_id,
-            "Проверка ещё не завершилась за 3 минуты. Монитор продолжает её выполнять; попробуйте открыть карточку позже.",
-        )
     except Exception:
         logger.exception("Failed waiting for health check command %s", command_id)
         try:
             await bot.send_message(chat_id, "Не удалось получить результат проверки из базы мониторинга.")
         except Exception:
             logger.exception("Failed to notify chat %s about health check", chat_id)
+    finally:
+        active_health_checks.pop(chat_id, None)
+
+
+async def block_router_navigation(message: Message) -> bool:
+    if message.chat.id not in active_health_checks:
+        return False
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    return True
+
+
+async def block_router_callback(callback: CallbackQuery) -> bool:
+    if callback.message.chat.id not in active_health_checks:
+        return False
+    await callback.answer("Проверка выполняется. Дождитесь результата.", show_alert=True)
+    return True
 
 
 async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -226,36 +243,50 @@ async def main() -> None:
 
     @dispatcher.message(CommandStart())
     async def start(message: Message) -> None:
+        if await block_router_navigation(message):
+            return
         await send_screen(bot, message.chat.id, "Центральный мониторинг роутеров", menu(), user_message=message)
 
     @dispatcher.message(Command("routers"))
     async def routers_command(message: Message) -> None:
+        if await block_router_navigation(message):
+            return
         await send_screen(bot, message.chat.id, await status(pool), await router_list_menu(pool), user_message=message)
 
     @dispatcher.message(Command("external_ips"))
     async def external_ips_command(message: Message) -> None:
+        if await block_router_navigation(message):
+            return
         text, markup = await external_ip_view(pool, message.from_user.id)
         await send_screen(bot, message.chat.id, text, markup, user_message=message)
 
     @dispatcher.message(Command("events"))
     async def events_command(message: Message) -> None:
+        if await block_router_navigation(message):
+            return
         rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
         text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
         await send_screen(bot, message.chat.id, text, menu(), user_message=message)
 
     @dispatcher.callback_query(F.data == "menu")
     async def main_menu(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         await replace_menu(callback, "Центральный мониторинг роутеров", menu())
         await callback.answer()
 
     @dispatcher.callback_query(F.data == "external_ips")
     async def external_ips(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         text, markup = await external_ip_view(pool, callback.from_user.id)
         await replace_menu(callback, text, markup)
         await callback.answer()
 
     @dispatcher.callback_query(F.data == "external_ip_add")
     async def external_ip_add(callback: CallbackQuery, state: FSMContext) -> None:
+        if await block_router_callback(callback):
+            return
         if not is_admin(callback.from_user.id):
             await callback.answer("Нет доступа", show_alert=True)
             return
@@ -265,6 +296,8 @@ async def main() -> None:
 
     @dispatcher.message(AddExternalIP.waiting_for_ip)
     async def external_ip_received(message: Message, state: FSMContext) -> None:
+        if await block_router_navigation(message):
+            return
         if not is_admin(message.from_user.id):
             await state.clear()
             return
@@ -285,11 +318,15 @@ async def main() -> None:
 
     @dispatcher.message(Command("cancel"))
     async def cancel_ip(message: Message, state: FSMContext) -> None:
+        if await block_router_navigation(message):
+            return
         await state.clear()
         await send_screen(bot, message.chat.id, "Действие отменено.", menu(), user_message=message)
 
     @dispatcher.callback_query(F.data.startswith("external_ip_remove:"))
     async def external_ip_remove(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         if not is_admin(callback.from_user.id):
             await callback.answer("Нет доступа", show_alert=True)
             return
@@ -318,11 +355,15 @@ async def main() -> None:
 
     @dispatcher.callback_query(F.data == "routers")
     async def routers(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         await replace_menu(callback, await status(pool), await router_list_menu(pool))
         await callback.answer()
 
     @dispatcher.callback_query(F.data.startswith("router:"))
     async def router_detail(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         router_id = callback.data.split(":", 1)[1]
         row = await pool.fetchrow("""SELECT r.display_name, r.model, r.gateway, r.reverse_port, h.* FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true WHERE r.id=$1""", router_id)
         if not row:
@@ -372,17 +413,31 @@ async def main() -> None:
         if not is_admin(callback.from_user.id):
             await callback.answer("Нет доступа", show_alert=True)
             return
+        if await block_router_callback(callback):
+            return
         router_id = callback.data.split(":", 1)[1]
+        router_name = await pool.fetchval("SELECT display_name FROM routers WHERE id=$1", router_id)
+        if not router_name:
+            await callback.answer("Роутер не найден", show_alert=True)
+            return
         command_id = await pool.fetchval(
             "INSERT INTO monitor_commands (router_id, action, requested_by, status, result) "
             "VALUES ($1, 'health_check', $2, 'pending', '{}'::jsonb) RETURNING id",
             router_id,
             str(callback.from_user.id),
         )
-        await callback.answer("Проверка запущена. Результат придёт сообщением.")
+        chat_id = callback.message.chat.id
+        active_health_checks[chat_id] = router_id
+        await callback.answer("Проверка запущена")
+        await send_screen(
+            bot,
+            chat_id,
+            f"⏳ Проверка роутера {router_name or router_id} выполняется.\n"
+            "Дождитесь результата — переход к другим роутерам пока закрыт.",
+        )
         task = asyncio.create_task(
             deliver_health_check_result(
-                pool, bot, callback.message.chat.id, router_id, command_id
+                pool, bot, chat_id, router_id, command_id
             )
         )
         health_check_tasks.add(task)
@@ -392,6 +447,8 @@ async def main() -> None:
     async def restart_prompt(callback: CallbackQuery) -> None:
         if not is_admin(callback.from_user.id):
             await callback.answer("Нет доступа", show_alert=True)
+            return
+        if await block_router_callback(callback):
             return
         router_id = callback.data.split(":", 1)[1]
         confirm = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Подтвердить restart", callback_data=f"restart-confirm:{router_id}")], [InlineKeyboardButton(text="Отмена", callback_data="routers")]])
@@ -403,6 +460,8 @@ async def main() -> None:
         if not is_admin(callback.from_user.id):
             await callback.answer("Нет доступа", show_alert=True)
             return
+        if await block_router_callback(callback):
+            return
         router_id = callback.data.split(":", 1)[1]
         await pool.execute("INSERT INTO monitor_commands (router_id, action, requested_by, status, result) VALUES ($1, 'restart_sing_box', $2, 'pending', '{}'::jsonb)", router_id, str(callback.from_user.id))
         await replace_menu(callback, "Перезапуск поставлен в очередь.", menu())
@@ -410,6 +469,8 @@ async def main() -> None:
 
     @dispatcher.callback_query(F.data == "events")
     async def events(callback: CallbackQuery) -> None:
+        if await block_router_callback(callback):
+            return
         rows = await pool.fetch("SELECT router_id, kind, severity, created_at FROM monitor_events ORDER BY created_at DESC LIMIT 10")
         text = "ПОСЛЕДНИЕ СОБЫТИЯ\n\n" + "\n".join(f"{row['created_at']:%H:%M} · {row['severity']} · {row['router_id']} · {row['kind']}" for row in rows) if rows else "Событий нет."
         await replace_menu(callback, text, menu())
