@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import ipaddress
 import json
 import logging
@@ -86,9 +87,10 @@ def router_menu(router_id: str, previous_id: str | None = None, next_id: str | N
 
 def format_health_check_result(router_name: str, status: str, result: dict) -> str:
     if status != "completed":
+        reason = result.get("error") or "причина не передана монитором"
         return (
             f"Проверка роутера {router_name} не выполнена.\n"
-            f"Причина: {result.get('error', 'неизвестная ошибка')}"
+            f"Причина: {html.escape(str(reason))}"
         )
 
     egress_ok = result.get("egress_check_ok", False)
@@ -182,22 +184,25 @@ async def replace_menu(callback: CallbackQuery, text: str, markup: InlineKeyboar
 
 
 async def status(pool: asyncpg.Pool) -> str:
-    rows = await pool.fetch("""SELECT r.display_name, r.gateway, r.reverse_port, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at, h.checks FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
+    rows = await pool.fetch("""SELECT r.display_name, r.gateway, r.reverse_port, h.transport_ok, h.process_ok, h.tun_ok, h.foreign_ip_ok, h.load1, h.mem_available_kb, h.vsz_kb, h.rss_kb, h.collected_at, h.checks, h.error FROM routers r LEFT JOIN LATERAL (SELECT * FROM health_samples WHERE router_id=r.id ORDER BY collected_at DESC LIMIT 1) h ON true ORDER BY r.id""")
     if not rows:
         return "Роутеры ещё не зарегистрированы."
     lines = ["СОСТОЯНИЕ РОУТЕРОВ", ""]
     for row in rows:
         checks_raw = row["checks"]
         checks = json.loads(checks_raw) if isinstance(checks_raw, str) else (checks_raw or {})
-        state = "🔴" if not row["transport_ok"] else ("✅" if row["foreign_ip_ok"] else "⚠️")
+        error = row["error"] or ""
+        gateway_unreachable = "Не удалось подключиться к шлюзу " in error
+        state = "⚠️" if gateway_unreachable else ("🔴" if not row["transport_ok"] else ("✅" if row["foreign_ip_ok"] else "⚠️"))
         gateway_match = re.search(r"\(([^)]+)\)$", row["gateway"] or "")
         gateway_host = gateway_match.group(1) if gateway_match else row["gateway"]
         if gateway_host == "host.docker.internal":
             gateway_host = "95.181.174.224"
         lines.extend([
             f"{state} {row['display_name']}",
-            f"   SSH: {'подключён' if row['transport_ok'] else 'недоступен'}",
-            f"   sing-box: {'работает' if row['process_ok'] else 'не работает'}",
+            f"   SSH: {'подключён' if row['transport_ok'] else ('не проверен: шлюз недоступен' if gateway_unreachable else 'недоступен')}",
+            f"   sing-box: {'нет свежих данных' if gateway_unreachable else ('работает' if row['process_ok'] else 'не работает')}",
+            *( [f"   Причина: {html.escape(error)}"] if error else [] ),
             *( ["   Телеметрия устарела: последний опрос не завершился"] if checks.get("telemetry_stale") else [] ),
             f"   ```ssh\n   ssh -J {ssh_jump_chain(gateway_host)} -p {row['reverse_port']} root@127.0.0.1\n   ```",
             "",

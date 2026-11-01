@@ -24,6 +24,11 @@ printf '\n'
 _IDENTITY_COMMAND = "cat /proc/sys/kernel/hostname 2>/dev/null || true"
 
 
+def describe_error(exc: Exception) -> str:
+    detail = str(exc).strip() or repr(exc)
+    return f"{type(exc).__name__}: {detail}"
+
+
 @dataclass(slots=True)
 class Collected:
     process_ok: bool
@@ -98,19 +103,38 @@ class SSHCollector:
     def __init__(self, user: str, keys: list[str] | None, timeout: int = 10, known_hosts: str | None = None) -> None:
         self.user, self.keys, self.timeout, self.known_hosts = user, keys, timeout, known_hosts
 
-    async def collect(self, router: Router, gateway: Gateway, allowed_ips: set[str] | None = None) -> Collected:
+    async def _connect_gateway(self, gateway: Gateway):
         import asyncssh
 
-        gateway_conn = await asyncio.wait_for(
-            asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
-            timeout=self.timeout,
-        )
-        router_conn = None
         try:
-            router_conn = await asyncio.wait_for(
+            return await asyncio.wait_for(
+                asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
+                timeout=self.timeout,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Не удалось подключиться к шлюзу {gateway.host}:{gateway.ssh_port}: {describe_error(exc)}"
+            ) from exc
+
+    async def _connect_router(self, router: Router, gateway: Gateway, gateway_conn):
+        import asyncssh
+
+        try:
+            return await asyncio.wait_for(
                 asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts),
                 timeout=self.timeout,
             )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Шлюз {gateway.host} доступен, но SSH к роутеру на reverse-порту "
+                f"127.0.0.1:{router.reverse_port} не установлено: {describe_error(exc)}"
+            ) from exc
+
+    async def collect(self, router: Router, gateway: Gateway, allowed_ips: set[str] | None = None) -> Collected:
+        gateway_conn = await self._connect_gateway(gateway)
+        router_conn = None
+        try:
+            router_conn = await self._connect_router(router, gateway, gateway_conn)
             result = await router_conn.run(_COMMAND, check=False)
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"remote command exited {result.exit_status}")
@@ -124,18 +148,10 @@ class SSHCollector:
 
     async def probe_identity(self, router: Router, gateway: Gateway) -> str:
         """Read only the router hostname through a candidate reverse tunnel."""
-        import asyncssh
-
-        gateway_conn = await asyncio.wait_for(
-            asyncssh.connect(gateway.host, port=gateway.ssh_port, username=self.user, client_keys=self.keys, known_hosts=self.known_hosts),
-            timeout=self.timeout,
-        )
+        gateway_conn = await self._connect_gateway(gateway)
         router_conn = None
         try:
-            router_conn = await asyncio.wait_for(
-                asyncssh.connect("127.0.0.1", port=router.reverse_port, username=self.user, client_keys=self.keys, tunnel=gateway_conn, known_hosts=self.known_hosts),
-                timeout=self.timeout,
-            )
+            router_conn = await self._connect_router(router, gateway, gateway_conn)
             result = await router_conn.run(_IDENTITY_COMMAND, check=False)
             if result.exit_status not in (0, None):
                 raise RuntimeError(result.stderr.strip() or f"identity probe exited {result.exit_status}")

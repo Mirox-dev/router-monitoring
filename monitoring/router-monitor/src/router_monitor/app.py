@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from prometheus_client import Gauge, start_http_server
 from sqlalchemy import select
 
-from .collector import SSHCollector
+from .collector import SSHCollector, describe_error
 from .config import load_inventory
 from .db import create_schema, make_engine, make_session_factory
 from .models import Event, ExternalIP, HealthSample, MonitorCommand, RouterRecord
@@ -75,7 +75,7 @@ async def poll_router(router, inventory, collector: SSHCollector, allowed_ips: s
         result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
         return router, result, None, True, None, None
     except Exception as exc:  # noqa: BLE001 — SSH and remote command errors vary by backend
-        error = str(exc)
+        error = describe_error(exc)
 
     try:
         identity = await collector.probe_identity(router, inventory.gateway_for(router))
@@ -92,7 +92,7 @@ async def poll_router(router, inventory, collector: SSHCollector, allowed_ips: s
             result = await collector.collect(router, inventory.gateway_for(router), allowed_ips)
             return router, result, None, True, moved_from, moved_to
         except Exception as moved_exc:  # noqa: BLE001 — isolate this router's second attempt
-            error = str(moved_exc)
+            error = describe_error(moved_exc)
     return router, None, error, transport_ok, moved_from, moved_to
 
 
@@ -198,7 +198,7 @@ async def process_commands(inventory, sessions, collector: SSHCollector) -> None
                 raise ValueError("action is not allowlisted")
             status = "completed"
         except Exception as exc:  # noqa: BLE001 — persist command failures for the bot
-            payload = {"error": str(exc)}
+            payload = {"error": describe_error(exc)}
         async with sessions() as session:
             current = await session.get(MonitorCommand, command.id)
             if current:
